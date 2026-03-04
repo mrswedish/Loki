@@ -25,13 +25,17 @@
 }
 
 /* ─── Reset & Base ─── */
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
 }
 
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
   overflow: hidden;
 }
@@ -56,13 +60,11 @@ body {
   height: 100%;
   pointer-events: none;
   z-index: 9999;
-  background: repeating-linear-gradient(
-    0deg,
-    transparent,
-    transparent 2px,
-    rgba(0, 0, 0, var(--scanline-intensity)) 2px,
-    rgba(0, 0, 0, var(--scanline-intensity)) 4px
-  );
+  background: repeating-linear-gradient(0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, var(--scanline-intensity)) 2px,
+      rgba(0, 0, 0, var(--scanline-intensity)) 4px);
 }
 
 /* ─── App Layout ─── */
@@ -90,10 +92,10 @@ body {
 
 .sidebar-header h1 {
   font-family: var(--font-terminal);
-  font-size: 28px;
-  letter-spacing: 3px;
+  font-size: 32px;
+  letter-spacing: 4px;
   text-transform: uppercase;
-  text-shadow: 0 0 10px var(--text-color), 0 0 20px var(--text-color);
+  color: var(--text-color);
   margin-bottom: 12px;
 }
 
@@ -266,8 +268,15 @@ body {
 }
 
 @keyframes pulse-dot {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.4;
+  }
 }
 
 /* ─── Chat Messages ─── */
@@ -288,6 +297,7 @@ body {
     opacity: 0;
     transform: translateY(8px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -351,12 +361,15 @@ body {
   padding: 0;
 }
 
-.message-content ul, .message-content ol {
+.message-content ul,
+.message-content ol {
   padding-left: 20px;
   margin-bottom: 8px;
 }
 
-.message-content h1, .message-content h2, .message-content h3 {
+.message-content h1,
+.message-content h2,
+.message-content h3 {
   font-family: var(--font-terminal);
   margin: 12px 0 6px;
   color: var(--text-color-bright);
@@ -378,8 +391,15 @@ body {
 }
 
 @keyframes blink-cursor {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0;
+  }
 }
 
 /* ─── Empty State ─── */
@@ -531,8 +551,13 @@ body {
 }
 
 @keyframes fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 .settings-modal {
@@ -552,6 +577,7 @@ body {
     opacity: 0;
     transform: scale(0.95);
   }
+
   to {
     opacity: 1;
     transform: scale(1);

@@ -171,7 +171,7 @@ function App() {
                 />
               </div>
               <span style={{ color: 'var(--text-color-dim)', fontSize: '14px' }}>
-                {downloadPercent}% (~2.8 GB)
+                {downloadPercent}% (~4.2 GB)
               </span>
             </div>
           </>
@@ -193,7 +193,7 @@ function App() {
               onClick={handleFirstRunDownload}
             >
               <Download size={18} />
-              Ladda ner Gemma 3n E2B (~2.8 GB)
+              Ladda ner Gemma 3n E2B (~4.2 GB)
             </button>
             <p style={{
               color: 'var(--text-color-dim)',

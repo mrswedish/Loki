@@ -69,8 +69,9 @@ impl InferenceEngine {
             .as_ref()
             .ok_or("Ingen modell laddad")?;
 
+        let n_ctx = 8192;
         let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(NonZeroU32::new(4096));
+            .with_n_ctx(NonZeroU32::new(n_ctx));
 
         let mut ctx = model
             .new_context(&self.backend, ctx_params)
@@ -81,17 +82,33 @@ impl InferenceEngine {
             .str_to_token(prompt, AddBos::Always)
             .map_err(|e| format!("Tokeniseringsfel: {:?}", e))?;
 
-        // Create batch with prompt tokens
-        let mut batch = LlamaBatch::new(4096, 1);
-        for (i, token) in tokens.iter().enumerate() {
-            let is_last = i == tokens.len() - 1;
-            batch.add(*token, i as i32, &[0], is_last)
-                .map_err(|e| format!("Batch-fel: {:?}", e))?;
-        }
+        // If the prompt is too long, we truncate it for safety to fit in context window
+        let max_prompt_tokens = (n_ctx - max_tokens - 10) as usize;
+        let tokens = if tokens.len() > max_prompt_tokens {
+            tokens[tokens.len() - max_prompt_tokens..].to_vec()
+        } else {
+            tokens
+        };
 
-        // Evaluate prompt
-        ctx.decode(&mut batch)
-            .map_err(|e| format!("Avkodningsfel: {:?}", e))?;
+        // Create batch with prompt tokens
+        // Default n_batch in llama.cpp is 2048, so we decode in chunks
+        let mut batch = LlamaBatch::new(2048, 1);
+        let mut n_past = 0;
+        
+        for chunk in tokens.chunks(2048) {
+            batch.clear();
+            for (i, token) in chunk.iter().enumerate() {
+                let is_last = (n_past + i) == tokens.len() - 1;
+                batch.add(*token, (n_past + i) as i32, &[0], is_last)
+                    .map_err(|e| format!("Batch-fel: {:?}", e))?;
+            }
+            
+            // Evaluate prompt chunk
+            ctx.decode(&mut batch)
+                .map_err(|e| format!("Avkodningsfel: {:?}", e))?;
+                
+            n_past += chunk.len();
+        }
 
         // Setup sampler
         let mut sampler = LlamaSampler::chain_simple([

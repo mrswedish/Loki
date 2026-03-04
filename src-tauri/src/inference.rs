@@ -2,7 +2,7 @@ use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaModel, Special};
+use llama_cpp_2::model::{AddBos, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
 use std::num::NonZeroU32;
 use std::path::Path;
@@ -113,7 +113,8 @@ impl InferenceEngine {
             }
 
             // Decode to string
-            let piece = model.token_to_str(token, Special::Tokenize)
+            #[allow(deprecated)]
+            let piece = model.token_to_str(token, llama_cpp_2::model::Special::Tokenize)
                 .unwrap_or_default();
 
             output.push_str(&piece);

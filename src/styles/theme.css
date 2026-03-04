@@ -19,7 +19,7 @@
   --accent-red: #ff3333;
   --scrollbar-thumb: #333333;
   --font-size: 16px;
-  --scanline-intensity: 0.05;
+  --scanline-intensity: 0.015;
   --font-terminal: 'VT323', monospace;
   --font-mono: 'JetBrains Mono', 'Courier New', monospace;
 }

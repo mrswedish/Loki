@@ -43,6 +43,10 @@ impl InferenceEngine {
             return Ok(());
         }
 
+        // Free old model from memory (especially important for Metal GPU backend) before loading the new one
+        self.model = None;
+        self.model_path = None;
+
         let params = LlamaModelParams::default();
 
         let model = LlamaModel::load_from_file(&self.backend, Path::new(path), &params)

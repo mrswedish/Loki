@@ -37,10 +37,10 @@ pub fn model_registry() -> Vec<ModelEntry> {
         ModelEntry {
             id: "gemma-3n-e2b".to_string(),
             name: "Gemma 3n E2B".to_string(),
-            filename: "gemma-3n-E2B-it-Q8_0.gguf".to_string(),
-            url: "https://huggingface.co/ggml-org/gemma-3n-E2B-it-GGUF/resolve/main/gemma-3n-E2B-it-Q8_0.gguf".to_string(),
-            size_bytes: 4_455_632_480,
-            description: "Google Gemma 3n – 2B params, Q8 (~4.2 GB)".to_string(),
+            filename: "google_gemma-3n-E2B-it-Q4_K_M.gguf".to_string(),
+            url: "https://huggingface.co/bartowski/google_gemma-3n-E2B-it-GGUF/resolve/main/google_gemma-3n-E2B-it-Q4_K_M.gguf".to_string(),
+            size_bytes: 1_850_000_000,
+            description: "Google Gemma 3n – 2B params, Q4 (~1.7 GB)".to_string(),
             is_default: false,
         },
         ModelEntry {

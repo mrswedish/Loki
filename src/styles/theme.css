@@ -920,3 +920,23 @@ body {
 .spin {
   animation: spin 1s linear infinite;
 }
+
+/* ─── Copy Button ─── */
+.copy-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-color-dim);
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  border-radius: 4px;
+}
+
+.copy-btn:hover {
+  color: var(--text-color);
+  background: var(--bg-tertiary);
+  box-shadow: 0 0 6px var(--border-glow);
+}

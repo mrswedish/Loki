@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { Copy, Check } from 'lucide-react';
 
 interface Message {
     role: string;
@@ -16,6 +17,15 @@ interface ChatAreaProps {
 
 export function ChatArea({ messages, isGenerating, activeSessionId, streamingContent }: ChatAreaProps) {
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+
+    const handleCopy = async (content: string, index: number) => {
+        // Strip out the file attachment XML tags when copying
+        const cleanContent = content.replace(/<file name="(.+?)">[\s\S]+?<\/file>\n\n/g, '');
+        await navigator.clipboard.writeText(cleanContent);
+        setCopiedIndex(index);
+        setTimeout(() => setCopiedIndex(null), 2000);
+    };
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -53,10 +63,21 @@ export function ChatArea({ messages, isGenerating, activeSessionId, streamingCon
                         <span className="message-prefix">
                             {msg.role === 'user' ? '> användare' : '$ sumrzr'}
                         </span>
-                        {' '}
-                        <span style={{ opacity: 0.5 }}>
-                            {new Date(msg.timestamp).toLocaleTimeString('sv-SE')}
-                        </span>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ opacity: 0.5 }}>
+                                {new Date(msg.timestamp).toLocaleTimeString('sv-SE')}
+                            </span>
+                            {msg.role === 'assistant' && (
+                                <button
+                                    className="copy-btn"
+                                    onClick={() => handleCopy(msg.content, index)}
+                                    title="Kopiera text"
+                                >
+                                    {copiedIndex === index ? <Check size={14} color="var(--accent-green)" /> : <Copy size={14} />}
+                                </button>
+                            )}
+                        </div>
                     </div>
                     <div className="message-content">
                         <ReactMarkdown>

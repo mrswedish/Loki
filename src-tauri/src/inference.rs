@@ -91,11 +91,11 @@ impl InferenceEngine {
         };
 
         // Create batch with prompt tokens
-        // Default n_batch in llama.cpp is 2048, so we decode in chunks
-        let mut batch = LlamaBatch::new(2048, 1);
+        // Default n_batch in llama.cpp is often 512 or 2048. We decode in chunks of 512 to be safe for Metal OOM and asserts.
+        let mut batch = LlamaBatch::new(512, 1);
         let mut n_past = 0;
         
-        for chunk in tokens.chunks(2048) {
+        for chunk in tokens.chunks(512) {
             batch.clear();
             for (i, token) in chunk.iter().enumerate() {
                 let is_last = (n_past + i) == tokens.len() - 1;

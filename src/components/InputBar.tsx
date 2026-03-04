@@ -27,7 +27,7 @@ export function InputBar({ onSend, disabled }: InputBarProps) {
 
         let messageContent = input.trim();
         if (attachedFile) {
-            messageContent = `[Bifogad fil: ${attachedFile.name}]\n\n${attachedFile.content}\n\n---\n\n${messageContent}`;
+            messageContent = `<file name="${attachedFile.name}">\n${attachedFile.content}\n</file>\n\n${messageContent}`;
         }
 
         onSend(messageContent);

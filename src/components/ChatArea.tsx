@@ -59,31 +59,38 @@ export function ChatArea({ messages, isGenerating, activeSessionId, streamingCon
                         </span>
                     </div>
                     <div className="message-content">
-                        <ReactMarkdown>{msg.content}</ReactMarkdown>
+                        <ReactMarkdown>
+                            {msg.role === 'user'
+                                ? msg.content.replace(/<file name="(.+?)">[\s\S]+?<\/file>\n\n/g, '📎 **Bifogad fil:** $1 _(Innehåll dolt för läsbarhet)_\n\n')
+                                : msg.content}
+                        </ReactMarkdown>
                     </div>
                 </div>
-            ))}
+            ))
+            }
 
-            {isGenerating && (
-                <div className="message assistant">
-                    <div className="message-header">
-                        <span className="message-prefix">$ sumrzr</span>
+            {
+                isGenerating && (
+                    <div className="message assistant">
+                        <div className="message-header">
+                            <span className="message-prefix">$ sumrzr</span>
+                        </div>
+                        {streamingContent ? (
+                            <div className="message-content">
+                                <ReactMarkdown>{streamingContent}</ReactMarkdown>
+                                <span className="cursor" />
+                            </div>
+                        ) : (
+                            <div className="typing-indicator">
+                                <span className="cursor" />
+                            </div>
+                        )}
                     </div>
-                    {streamingContent ? (
-                        <div className="message-content">
-                            <ReactMarkdown>{streamingContent}</ReactMarkdown>
-                            <span className="cursor" />
-                        </div>
-                    ) : (
-                        <div className="typing-indicator">
-                            <span className="cursor" />
-                        </div>
-                    )}
-                </div>
-            )}
+                )
+            }
 
             <div ref={messagesEndRef} />
-        </div>
+        </div >
     );
 }
 

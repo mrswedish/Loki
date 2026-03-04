@@ -325,6 +325,8 @@ body {
   line-height: 1.7;
   white-space: pre-wrap;
   word-wrap: break-word;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .message.user .message-content {

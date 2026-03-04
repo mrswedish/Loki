@@ -41,7 +41,7 @@ pub fn model_registry() -> Vec<ModelEntry> {
             url: "https://huggingface.co/ggml-org/gemma-3n-E2B-it-GGUF/resolve/main/gemma-3n-E2B-it-Q8_0.gguf".to_string(),
             size_bytes: 4_455_632_480,
             description: "Google Gemma 3n – 2B params, Q8 (~4.2 GB)".to_string(),
-            is_default: true,
+            is_default: false,
         },
         ModelEntry {
             id: "ministral-3b".to_string(),
@@ -49,8 +49,8 @@ pub fn model_registry() -> Vec<ModelEntry> {
             filename: "Ministral-3-3B-Instruct-2512-Q8_0.gguf".to_string(),
             url: "https://huggingface.co/ggml-org/Ministral-3-3B-Instruct-2512-GGUF/resolve/main/Ministral-3-3B-Instruct-2512-Q8_0.gguf".to_string(),
             size_bytes: 3_429_006_336,
-            description: "Mistral 3B – Kraftigare alternativ, Q8 (~3.2 GB)".to_string(),
-            is_default: false,
+            description: "Mistral 3B – Q8 (~3.2 GB)".to_string(),
+            is_default: true,
         },
     ]
 }

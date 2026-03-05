@@ -56,8 +56,7 @@ pub fn model_registry() -> Vec<ModelEntry> {
 }
 
 fn models_dir() -> PathBuf {
-    let base = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    base.join(".sumrzr").join("models")
+    crate::get_app_dir().join("models")
 }
 
 pub fn list_models_with_status() -> Vec<ModelStatus> {

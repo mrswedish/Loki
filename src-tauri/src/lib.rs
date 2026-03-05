@@ -138,8 +138,14 @@ fn delete_model_cmd(model_id: String) -> Result<(), String> {
         .ok_or_else(|| format!("Okänd modell (kan ej ta bort): {}", model_id))?;
 
     let dest = models_dir.join(&entry.filename);
+    let legacy_filename = entry.filename.replace("-E2B", "_E2B");
+    let legacy_dest = models_dir.join(&legacy_filename);
+
     if dest.exists() {
         fs::remove_file(&dest).map_err(|e| format!("Kunde inte ta bort fil: {}", e))?;
+    }
+    if legacy_dest.exists() {
+        let _ = fs::remove_file(&legacy_dest);
     }
     
     Ok(())

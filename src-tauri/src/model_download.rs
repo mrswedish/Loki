@@ -65,13 +65,20 @@ pub fn list_models_with_status() -> Vec<ModelStatus> {
         .into_iter()
         .map(|entry| {
             let path = dir.join(&entry.filename);
-            let downloaded = path.exists();
+            let legacy_filename = entry.filename.replace("-E2B", "_E2B");
+            let legacy_path = dir.join(&legacy_filename);
+            
+            let downloaded = path.exists() || legacy_path.exists();
+            let final_path = if path.exists() {
+                Some(path.to_string_lossy().to_string())
+            } else if legacy_path.exists() {
+                Some(legacy_path.to_string_lossy().to_string())
+            } else {
+                None
+            };
+
             ModelStatus {
-                local_path: if downloaded {
-                    Some(path.to_string_lossy().to_string())
-                } else {
-                    None
-                },
+                local_path: final_path,
                 downloaded,
                 entry,
             }
@@ -86,8 +93,13 @@ pub fn get_default_model_path() -> Option<String> {
         .find(|e| e.is_default)
         .and_then(|entry| {
             let path = dir.join(&entry.filename);
+            let legacy_filename = entry.filename.replace("-E2B", "_E2B");
+            let legacy_path = dir.join(&legacy_filename);
+
             if path.exists() {
                 Some(path.to_string_lossy().to_string())
+            } else if legacy_path.exists() {
+                Some(legacy_path.to_string_lossy().to_string())
             } else {
                 None
             }

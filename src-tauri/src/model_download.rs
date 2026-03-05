@@ -161,13 +161,14 @@ pub async fn download_model(model_id: String, app: AppHandle) -> Result<String, 
         }
     }
 
-    file.flush().await.map_err(|e| format!("Flush-fel: {}", e))?;
+    file.sync_all().await.map_err(|e| format!("Sync-fel: {}", e))?;
     drop(file);
 
-    // Rename temp → final
-    tokio::fs::rename(&tmp_path, &dest)
-        .await
-        .map_err(|e| format!("Kunde inte byta namn: {}", e))?;
+    // Fallback till kopiering för Windows om filen fortfarande är låst
+    if let Err(_e) = std::fs::rename(&tmp_path, &dest) {
+        std::fs::copy(&tmp_path, &dest).map_err(|e| format!("Kunde inte kopiera temp-filen: {}", e))?;
+        let _ = std::fs::remove_file(&tmp_path);
+    }
 
     let _ = app.emit("download-complete", model_id.clone());
 

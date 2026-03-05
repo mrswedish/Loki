@@ -88,6 +88,7 @@ function App() {
       setNeedsDownload(false);
     } catch (e) {
       console.error('First-run download failed:', e);
+      alert(`Nedladdningsfel: ${e}`);
     } finally {
       unlisten();
       setIsDownloading(false);
@@ -184,7 +185,7 @@ function App() {
               maxWidth: '400px',
               lineHeight: '1.8',
             }}>
-              Välkommen! Sumrzr behöver ladda ner en AI-modell
+              Välkommen! Loke behöver ladda ner en AI-modell
               <br />för att fungera. Detta görs bara en gång.
             </p>
             <button
@@ -201,7 +202,7 @@ function App() {
               opacity: 0.5,
               marginTop: '12px',
             }}>
-              Modellen sparas i ~/.sumrzr/models/
+              Modellen sparas i ~/.loke/models/
             </p>
           </>
         )}

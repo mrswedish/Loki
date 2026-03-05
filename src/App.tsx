@@ -157,7 +157,7 @@ function App() {
   if (needsDownload) {
     return (
       <div className="loading-screen">
-        <div className="logo-text">SUMRZR</div>
+        <div className="logo-text">LOKE</div>
         {isDownloading ? (
           <>
             <p style={{ color: 'var(--text-color)', fontSize: '16px' }}>

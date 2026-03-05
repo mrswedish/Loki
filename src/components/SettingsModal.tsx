@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, Download, Check, Loader } from 'lucide-react';
+import { X, Download, Check, Loader, Trash2 } from 'lucide-react';
 import { useModels, AvailableModel } from '../hooks/useModels';
 
 interface Settings {
@@ -32,6 +32,7 @@ export function SettingsModal({ settings, onUpdate, onClose, onModelLoaded }: Se
         loadAvailableModels,
         downloadModel,
         loadModelIntoEngine,
+        deleteModel,
         formatSize,
     } = useModels();
 
@@ -131,12 +132,26 @@ export function SettingsModal({ settings, onUpdate, onClose, onModelLoaded }: Se
                                                 <Check size={14} /> Aktiv
                                             </button>
                                         ) : model.downloaded ? (
-                                            <button
-                                                className="model-btn"
-                                                onClick={() => handleSelectModel(model)}
-                                            >
-                                                Välj
-                                            </button>
+                                            <>
+                                                <button
+                                                    className="model-btn"
+                                                    onClick={() => handleSelectModel(model)}
+                                                >
+                                                    Välj
+                                                </button>
+                                                <button
+                                                    className="model-btn danger"
+                                                    style={{ marginLeft: '8px', padding: '6px', background: 'transparent', color: '#ff4444' }}
+                                                    title="Ta bort modell"
+                                                    onClick={() => {
+                                                        if (confirm(`Är du säker på att du vill ta bort ${model.name}?`)) {
+                                                            deleteModel(model.id);
+                                                        }
+                                                    }}
+                                                >
+                                                    <Trash2 size={16} />
+                                                </button>
+                                            </>
                                         ) : (
                                             <button
                                                 className="model-btn download"
@@ -203,9 +218,9 @@ export function SettingsModal({ settings, onUpdate, onClose, onModelLoaded }: Se
                     <div className="settings-section">
                         <h3>Om</h3>
                         <p style={{ fontSize: '12px', color: 'var(--text-color-dim)', lineHeight: '1.8' }}>
-                            Sumrzr v0.1.0
+                            Loke v0.1.2
                             <br />
-                            Lokal AI-mötessummerare
+                            Lokala Kontext-Expert
                             <br />
                             Byggd med Tauri + React + llama.cpp
                             <br />

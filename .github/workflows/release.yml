@@ -32,7 +32,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'Sumrzr ${{ github.ref_name }}'
+          releaseName: 'Loke ${{ github.ref_name }}'
           releaseBody: 'Se nedan för filer att ladda ner för Mac (DMG) och Windows (EXE).'
           releaseDraft: true
           prerelease: false
@@ -84,8 +84,44 @@ jobs:
           CMAKE_MSVC_RUNTIME_LIBRARY: MultiThreaded
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'Sumrzr ${{ github.ref_name }}'
+          releaseName: 'Loke ${{ github.ref_name }}'
           releaseBody: 'Se nedan för filer att ladda ner för Mac (DMG) och Windows (EXE).'
           releaseDraft: true
           prerelease: false
           args: --features vulkan -- --no-default-features
+
+      - name: Extract Project Version
+        run: |
+          $VERSION = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          echo "APP_VERSION=$VERSION" >> $env:GITHUB_ENV
+
+      - name: Copy Portable Executable
+        env:
+          CARGO_TARGET_DIR: D:\t
+        run: |
+          $targetPath = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "src-tauri/target" }
+          $exePaths = @(
+            "$targetPath/release/loke.exe",
+            "$targetPath/x86_64-pc-windows-msvc/release/loke.exe"
+          )
+          
+          $found = $false
+          foreach ($p in $exePaths) {
+            if (Test-Path $p) {
+              Copy-Item -Path $p -Destination "Loke-portable.exe"
+              $found = $true
+              break
+            }
+          }
+          
+          if (-not $found) {
+            Get-ChildItem -Path src-tauri/target -Filter "*.exe" -Recurse | Select-Object FullName
+            Write-Error "Could not find the executable."
+          }
+
+      - name: Upload Portable Executable
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            Loke-portable.exe

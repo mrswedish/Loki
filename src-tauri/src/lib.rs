@@ -7,10 +7,10 @@ use std::path::PathBuf;
 mod model_download;
 mod inference;
 
-/// Get the app data directory (~/.sumrzr/)
+/// Get the app data directory (~/.loke/)
 pub fn get_app_dir() -> PathBuf {
     let home = dirs::home_dir().expect("Could not find home directory");
-    home.join(".sumrzr")
+    home.join(".loke")
 }
 
 /// Ensure all app directories exist
@@ -72,7 +72,7 @@ impl Default for Settings {
         Self {
             active_model: None,
             font_size: 16,
-            scanline_intensity: 30,
+            scanline_intensity: 0,
             text_color: "#ffb000".to_string(),
         }
     }
@@ -127,6 +127,22 @@ async fn download_model_cmd(model_id: String, app: tauri::AppHandle) -> Result<S
 #[tauri::command]
 fn check_default_model() -> bool {
     model_download::get_default_model_path().is_some()
+}
+
+#[tauri::command]
+fn delete_model_cmd(model_id: String) -> Result<(), String> {
+    let models_dir = get_app_dir().join("models");
+    let entry = model_download::model_registry()
+        .into_iter()
+        .find(|e| e.id == model_id)
+        .ok_or_else(|| format!("Okänd modell (kan ej ta bort): {}", model_id))?;
+
+    let dest = models_dir.join(&entry.filename);
+    if dest.exists() {
+        fs::remove_file(&dest).map_err(|e| format!("Kunde inte ta bort fil: {}", e))?;
+    }
+    
+    Ok(())
 }
 
 // ─── Inference ───────────────────────────────────────────
@@ -326,6 +342,7 @@ pub fn run() {
             list_models,
             list_available_models,
             download_model_cmd,
+            delete_model_cmd,
             check_default_model,
             load_model_cmd,
             is_model_loaded,

@@ -1,12 +1,12 @@
 [package]
-name = "sumrzr"
-version = "0.1.0"
-description = "Sumrzr – Lokal AI-mötessummerare"
+name = "loke"
+version = "0.1.2"
+description = "Loke – Lokal kontext expert"
 authors = ["mrswedish"]
 edition = "2021"
 
 [lib]
-name = "sumrzr_lib"
+name = "loke_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

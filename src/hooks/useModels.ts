@@ -88,6 +88,18 @@ export function useModels() {
         }
     }, []);
 
+    const deleteModel = useCallback(async (modelId: string) => {
+        try {
+            await invoke('delete_model_cmd', { modelId });
+            await loadAvailableModels();
+            await loadModels();
+            return true;
+        } catch (e) {
+            console.error('Failed to delete model:', e);
+            return false;
+        }
+    }, [loadAvailableModels, loadModels]);
+
     const formatSize = (bytes: number): string => {
         if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
         if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(0)} MB`;
@@ -103,6 +115,7 @@ export function useModels() {
         loadAvailableModels,
         downloadModel,
         loadModelIntoEngine,
+        deleteModel,
         formatSize,
     };
 }

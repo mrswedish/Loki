@@ -14,7 +14,7 @@ export function TerminalHeader({ activeModel, sessionName }: TerminalHeaderProps
     return (
         <div className="terminal-header">
             <div className="title">
-                {sessionName || 'SUMRZR TERMINAL'}
+                {sessionName || 'LOKE TERMINAL'}
             </div>
             <div className="model-indicator">
                 <Cpu size={14} />

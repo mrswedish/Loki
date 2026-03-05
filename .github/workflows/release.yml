@@ -7,36 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  release-macos:
-    runs-on: macos-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin, x86_64-apple-darwin
-
-      - name: Install Frontend Dependencies
-        run: npm install
-
-      - name: Build and Release Tauri App (Mac Metal)
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Loke ${{ github.ref_name }}'
-          releaseBody: 'Se nedan för filer att ladda ner för Mac (DMG) och Windows (EXE).'
-          releaseDraft: true
-          prerelease: false
-          args: --features metal
 
   release-windows:
     runs-on: windows-latest
@@ -88,7 +59,7 @@ jobs:
           releaseBody: 'Se nedan för filer att ladda ner för Mac (DMG) och Windows (EXE).'
           releaseDraft: true
           prerelease: false
-          args: --features vulkan -- --no-default-features
+          args: --features vulkan --bundles none -- --no-default-features
 
       - name: Extract Project Version
         run: |
@@ -126,62 +97,4 @@ jobs:
           files: |
             Loke-portable.exe
 
-      - name: Copy Setup Executable
-        env:
-          CARGO_TARGET_DIR: D:\t
-        run: |
-          $targetPath = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "src-tauri/target" }
-          $setupPaths = @(
-            "$targetPath/release/bundle/nsis",
-            "$targetPath/x86_64-pc-windows-msvc/release/bundle/nsis"
-          )
-          
-          $found = $false
-          foreach ($p in $setupPaths) {
-            if (Test-Path $p) {
-              $setupExe = Get-ChildItem -Path $p -Filter "*setup.exe" | Select-Object -First 1
-              if ($setupExe) {
-                Copy-Item -Path $setupExe.FullName -Destination "Loke-setup.exe"
-                $found = $true
-                break
-              }
-            }
-          }
-          
-          if (-not $found) {
-            Write-Warning "Could not find the NSIS setup executable."
-          }
 
-      - name: Upload Setup Executable
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: |
-            Loke-setup.exe
-
-      - name: Build CPU-Only Diagnostic App
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CMAKE_GENERATOR: Ninja
-          CARGO_TARGET_DIR: D:\cpu
-          RUSTFLAGS: -C target-feature=+crt-static
-          CFLAGS: /MT
-          CXXFLAGS: /MT
-          CMAKE_POLICY_DEFAULT_CMP0091: NEW
-          CMAKE_MSVC_RUNTIME_LIBRARY: MultiThreaded
-        run: npm run tauri build -- -- --no-default-features
-
-      - name: Copy CPU Executable
-        run: |
-          $targetPath = "D:\cpu\release\loke.exe"
-          if (-not (Test-Path $targetPath)) {
-            $targetPath = "D:\cpu\x86_64-pc-windows-msvc\release\loke.exe"
-          }
-          Copy-Item -Path $targetPath -Destination "Loke-cpu.exe"
-
-      - name: Upload CPU Executable
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: |
-            Loke-cpu.exe

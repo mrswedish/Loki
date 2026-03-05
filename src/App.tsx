@@ -63,8 +63,11 @@ function App() {
               }
             } catch (e) {
               console.error('Failed to auto-load model:', e);
+              updateSettings({ active_model: null });
               alert(`Kunde inte ladda in den sparade modellen i minnet under uppstart.\nDetaljer: ${e}`);
             }
+          } else if (settings.active_model) {
+            updateSettings({ active_model: null });
           }
         }
       } catch (e) {

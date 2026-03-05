@@ -84,6 +84,7 @@ export function useModels() {
             return true;
         } catch (e) {
             console.error('Failed to load model:', e);
+            alert(`Llama.cpp Motor-fel:\nKunde inte läsa in modellen i minnet.\n\nDetaljer: ${e}`);
             return false;
         }
     }, []);
@@ -96,6 +97,7 @@ export function useModels() {
             return true;
         } catch (e) {
             console.error('Failed to delete model:', e);
+            alert(`Fel vid radering:\n${e}`);
             return false;
         }
     }, [loadAvailableModels, loadModels]);

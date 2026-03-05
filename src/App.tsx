@@ -63,6 +63,7 @@ function App() {
               }
             } catch (e) {
               console.error('Failed to auto-load model:', e);
+              alert(`Kunde inte ladda in den sparade modellen i minnet under uppstart.\nDetaljer: ${e}`);
             }
           }
         }

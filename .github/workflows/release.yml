@@ -59,7 +59,7 @@ jobs:
           releaseBody: 'Se nedan för filer att ladda ner för Mac (DMG) och Windows (EXE).'
           releaseDraft: true
           prerelease: false
-          args: --features vulkan --bundles none -- --no-default-features
+          args: --features vulkan --no-bundle -- --no-default-features
 
       - name: Extract Project Version
         run: |

@@ -47,7 +47,7 @@ impl InferenceEngine {
         self.model = None;
         self.model_path = None;
 
-        let mut params = LlamaModelParams::default();
+        let mut params = LlamaModelParams::default().with_use_mmap(false);
         #[cfg(feature = "vulkan")]
         {
             params = params.with_n_gpu_layers(1000); // Offload allt till GPU
@@ -89,7 +89,7 @@ impl InferenceEngine {
         // Fallback: If GPU load fails (often happens with Vulkan driver/memory issues returning NullResult), retry on CPU
         if model_res.is_err() {
             println!("GPU model load failed or returned NullResult. Retrying purely on CPU...");
-            let cpu_params = LlamaModelParams::default().with_n_gpu_layers(0);
+            let cpu_params = LlamaModelParams::default().with_use_mmap(false).with_n_gpu_layers(0);
             model_res = LlamaModel::load_from_file(&self.backend, safe_path, &cpu_params);
         }
 

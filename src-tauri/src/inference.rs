@@ -58,6 +58,17 @@ impl InferenceEngine {
         }
 
         let path_obj = Path::new(path);
+        
+        // --- DEBUG LOGGING FÖR WINDOWS ---
+        let desktop_path = dirs::desktop_dir().unwrap_or_else(|| std::path::PathBuf::from("C:\\"));
+        let log_file = desktop_path.join("loke_debug_log.txt");
+        
+        let mut log_msgs = vec![
+            format!("=== LADDAR MODELL ==="),
+            format!("Path_str: {}", path),
+            format!("Path exists: {}", path_obj.exists()),
+            format!("Path is_file: {}", path_obj.is_file()),
+        ];
 
         // 1. Verify Rust can actually read the file natively (Checks for Windows Defender locks)
         match std::fs::File::open(&path_obj) {
@@ -86,15 +97,30 @@ impl InferenceEngine {
         // First attempt: with GPU layers
         let mut model_res = LlamaModel::load_from_file(&self.backend, safe_path, &params);
 
-        // Fallback: If GPU load fails (often happens with Vulkan driver/memory issues returning NullResult), retry on CPU
-        if model_res.is_err() {
-            println!("GPU model load failed or returned NullResult. Retrying purely on CPU...");
-            let cpu_params = LlamaModelParams::default().with_n_gpu_layers(0);
-            model_res = LlamaModel::load_from_file(&self.backend, safe_path, &cpu_params);
-        }
+            
+            log_msgs.push(format!("GPU res is_err: {}", model_res.is_err()));
+            // Fallback: If GPU load fails (often happens with Vulkan driver/memory issues returning NullResult), retry on CPU
+            if let Err(e) = &model_res {
+                println!("GPU model load failed or returned NullResult. Retrying purely on CPU...");
+                log_msgs.push(format!("GPU Error: {:?}", e));
+                
+                let cpu_params = LlamaModelParams::default().with_n_gpu_layers(0);
+                model_res = LlamaModel::load_from_file(&self.backend, safe_path, &cpu_params);
+                
+                if let Err(cpu_e) = &model_res {
+                    log_msgs.push(format!("CPU Error: {:?}", cpu_e));
+                } else {
+                    log_msgs.push(format!("CPU load succeeded!"));
+                }
+            } else {
+                log_msgs.push(format!("GPU load succeeded!"));
+            }
 
-        let model = model_res
-            .map_err(|e| format!("Kunde inte ladda modell från '{}': {:?}", path, e))?;
+            let final_log = log_msgs.join("\n");
+            let _ = std::fs::write(&log_file, final_log);
+
+            let model = model_res
+                .map_err(|e| format!("Kunde inte ladda modell från '{}': {:?}", path, e))?;
 
         self.model = Some(model);
         self.model_path = Some(path.to_string());

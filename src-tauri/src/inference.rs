@@ -9,6 +9,53 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 
+/// On Windows, llama.cpp's C code calls fopen() which interprets the path as ANSI (Windows-1252),
+/// not UTF-8. If the path contains non-ASCII characters (e.g. Swedish letters in the username),
+/// fopen() silently fails even though Rust can open the file fine (Rust uses wide Win32 APIs).
+///
+/// Fix: call GetShortPathNameW to get the 8.3 short form of the path, which is always ASCII-safe.
+/// On other platforms, just normalise slashes.
+#[cfg(target_os = "windows")]
+fn to_llama_safe_path(path: &str) -> String {
+    if path.is_ascii() {
+        return path.replace('\\', "/");
+    }
+
+    // Declare GetShortPathNameW directly – no extra crate needed.
+    extern "system" {
+        fn GetShortPathNameW(
+            lpsz_long_path: *const u16,
+            lpsz_short_path: *mut u16,
+            cch_buffer: u32,
+        ) -> u32;
+    }
+
+    use std::os::windows::ffi::OsStrExt;
+    let wide: Vec<u16> = std::ffi::OsStr::new(path)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    // First call: get required buffer size.
+    let needed = unsafe { GetShortPathNameW(wide.as_ptr(), std::ptr::null_mut(), 0) };
+    if needed == 0 {
+        return path.replace('\\', "/");
+    }
+
+    let mut buf = vec![0u16; needed as usize];
+    let len = unsafe { GetShortPathNameW(wide.as_ptr(), buf.as_mut_ptr(), needed) };
+    if len == 0 || len >= needed {
+        return path.replace('\\', "/");
+    }
+
+    String::from_utf16_lossy(&buf[..len as usize]).replace('\\', "/")
+}
+
+#[cfg(not(target_os = "windows"))]
+fn to_llama_safe_path(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
 #[derive(Clone, Serialize)]
 pub struct ChatToken {
     pub session_id: String,
@@ -93,10 +140,10 @@ impl InferenceEngine {
             }
         }
 
-        // 2. Format path safely for C++
-        // `llama.cpp` fopen sometimes struggles with standard `\` paths on Windows if they get double-escaped.
-        // Forward slashes `/` are universally accepted by Windows APIs and perfectly safe for C++.
-        let safe_path_str = path.replace("\\", "/");
+        // 2. Convert path to a form that llama.cpp's C fopen() can handle.
+        // See `to_llama_safe_path` above for full explanation.
+        let safe_path_str = to_llama_safe_path(path);
+        log_msgs.push(format!("Safe path for llama.cpp: {}", safe_path_str));
         let safe_path = Path::new(&safe_path_str);
 
         // First attempt: with GPU layers

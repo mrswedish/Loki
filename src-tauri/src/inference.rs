@@ -1,3 +1,5 @@
+#[cfg(target_os = "windows")]
+use llama_cpp_sys_2;
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
@@ -144,13 +146,17 @@ impl InferenceEngine {
         self.model = None;
         self.model_path = None;
 
+        let mut params = LlamaModelParams::default();
         // On Windows, llama.cpp's mmap (CreateFileMapping/MapViewOfFile) is silently blocked by
         // Windows Defender and other security software scanning the model file, which causes
         // NullResult without any error message. Disable mmap on Windows; use normal file I/O instead.
+        // `with_use_mmap` doesn't exist in llama-cpp-2 0.1.138, so we write the field directly.
         #[cfg(target_os = "windows")]
-        let mut params = LlamaModelParams::default().with_use_mmap(false);
-        #[cfg(not(target_os = "windows"))]
-        let mut params = LlamaModelParams::default();
+        unsafe {
+            let raw = &mut params as *mut LlamaModelParams
+                as *mut llama_cpp_sys_2::llama_model_params;
+            (*raw).use_mmap = false;
+        }
 
         #[cfg(feature = "vulkan")]
         {
@@ -223,10 +229,13 @@ impl InferenceEngine {
         if let Err(e) = &model_res {
             log_msgs.push(format!("GPU Error: {:?}", e));
 
-            #[cfg(target_os = "windows")]
-            let cpu_params = LlamaModelParams::default().with_use_mmap(false).with_n_gpu_layers(0);
-            #[cfg(not(target_os = "windows"))]
             let cpu_params = LlamaModelParams::default().with_n_gpu_layers(0);
+            #[cfg(target_os = "windows")]
+            unsafe {
+                let raw = &cpu_params as *const LlamaModelParams
+                    as *mut llama_cpp_sys_2::llama_model_params;
+                (*raw).use_mmap = false;
+            }
 
             #[cfg(target_os = "windows")]
             let (cpu_res, cpu_stderr) = with_captured_stderr(&stderr_file, || {

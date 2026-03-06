@@ -1,112 +1,11 @@
-#[cfg(target_os = "windows")]
-use llama_cpp_sys_2;
-use llama_cpp_2::context::params::LlamaContextParams;
-use llama_cpp_2::llama_backend::LlamaBackend;
-use llama_cpp_2::llama_batch::LlamaBatch;
-use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaModel};
-use llama_cpp_2::sampling::LlamaSampler;
-use std::num::NonZeroU32;
-use std::path::Path;
+use serde::Serialize;
+use std::io::{BufRead, BufReader};
+use std::net::TcpListener;
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
-
-/// On Windows, llama.cpp's C code calls fopen() which interprets the path as ANSI (Windows-1252),
-/// not UTF-8. If the path contains non-ASCII characters (e.g. Swedish letters in the username),
-/// fopen() silently fails even though Rust can open the file fine (Rust uses wide Win32 APIs).
-///
-/// Fix: call GetShortPathNameW to get the 8.3 short form of the path, which is always ASCII-safe.
-/// On other platforms, just normalise slashes.
-#[cfg(target_os = "windows")]
-fn to_llama_safe_path(path: &str) -> String {
-    if path.is_ascii() {
-        return path.replace('\\', "/");
-    }
-
-    // Declare GetShortPathNameW directly – no extra crate needed.
-    extern "system" {
-        fn GetShortPathNameW(
-            lpsz_long_path: *const u16,
-            lpsz_short_path: *mut u16,
-            cch_buffer: u32,
-        ) -> u32;
-    }
-
-    use std::os::windows::ffi::OsStrExt;
-    let wide: Vec<u16> = std::ffi::OsStr::new(path)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-
-    // First call: get required buffer size.
-    let needed = unsafe { GetShortPathNameW(wide.as_ptr(), std::ptr::null_mut(), 0) };
-    if needed == 0 {
-        return path.replace('\\', "/");
-    }
-
-    let mut buf = vec![0u16; needed as usize];
-    let len = unsafe { GetShortPathNameW(wide.as_ptr(), buf.as_mut_ptr(), needed) };
-    if len == 0 || len >= needed {
-        return path.replace('\\', "/");
-    }
-
-    String::from_utf16_lossy(&buf[..len as usize]).replace('\\', "/")
-}
-
-#[cfg(not(target_os = "windows"))]
-fn to_llama_safe_path(path: &str) -> String {
-    path.replace('\\', "/")
-}
-
-/// Redirects the C runtime's stderr (fd 2) to `capture_path` for the duration of `f`,
-/// then restores it. Returns the result of `f` and the captured text.
-/// This lets us see what llama.cpp prints when it fails.
-#[cfg(target_os = "windows")]
-fn with_captured_stderr<F: FnOnce() -> R, R>(capture_path: &std::path::Path, f: F) -> (R, String) {
-    extern "C" {
-        fn _dup(fd: i32) -> i32;
-        fn _dup2(fd1: i32, fd2: i32) -> i32;
-        fn _close(fd: i32) -> i32;
-        fn _open_osfhandle(osfhandle: isize, flags: i32) -> i32;
-        fn _flushall() -> i32;
-    }
-
-    let file = match std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(capture_path)
-    {
-        Ok(f) => f,
-        Err(_) => return (f(), String::new()),
-    };
-
-    use std::os::windows::io::IntoRawHandle;
-    let handle = file.into_raw_handle();
-    // _O_WRONLY | _O_TEXT = 0x0001 | 0x4000
-    let new_fd = unsafe { _open_osfhandle(handle as isize, 0x4001) };
-    if new_fd < 0 {
-        return (f(), String::new());
-    }
-
-    let saved = unsafe { _dup(2) };
-    unsafe {
-        _flushall();
-        _dup2(new_fd, 2);
-        _close(new_fd);
-    }
-
-    let result = f();
-
-    unsafe {
-        _flushall();
-        _dup2(saved, 2);
-        _close(saved);
-    }
-
-    let captured = std::fs::read_to_string(capture_path).unwrap_or_default();
-    (result, captured)
-}
 
 #[derive(Clone, Serialize)]
 pub struct ChatToken {
@@ -115,280 +14,191 @@ pub struct ChatToken {
     pub done: bool,
 }
 
-use serde::Serialize;
-
 pub struct InferenceEngine {
+    server_binary: Option<PathBuf>,
+    server_process: Option<Child>,
+    pub port: Option<u16>,
     model_path: Option<String>,
-    model: Option<LlamaModel>,
-    backend: LlamaBackend,
 }
 
-// Safety: LlamaBackend and LlamaModel implement Send
+// Safety: process Child is owned by InferenceEngine and only accessed through Mutex
 unsafe impl Send for InferenceEngine {}
 
+impl Drop for InferenceEngine {
+    fn drop(&mut self) {
+        self.kill_server();
+    }
+}
+
 impl InferenceEngine {
-    pub fn new() -> Result<Self, String> {
-        let backend = LlamaBackend::init().map_err(|e| format!("Backend init failed: {}", e))?;
-        Ok(Self {
-            backend,
-            model: None,
+    pub fn new() -> Self {
+        Self {
+            server_binary: None,
+            server_process: None,
+            port: None,
             model_path: None,
-        })
+        }
+    }
+
+    pub fn set_server_binary(&mut self, path: PathBuf) {
+        self.server_binary = Some(path);
+    }
+
+    fn kill_server(&mut self) {
+        if let Some(mut child) = self.server_process.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        self.port = None;
     }
 
     pub fn load_model(&mut self, path: &str) -> Result<(), String> {
-        // Don't reload if same model
-        if self.model_path.as_deref() == Some(path) && self.model.is_some() {
-            return Ok(());
-        }
-
-        // Free old model from memory (especially important for Metal GPU backend) before loading the new one
-        self.model = None;
-        self.model_path = None;
-
-        let mut params = LlamaModelParams::default();
-        // On Windows, llama.cpp's mmap (CreateFileMapping/MapViewOfFile) is silently blocked by
-        // Windows Defender and other security software scanning the model file, which causes
-        // NullResult without any error message. Disable mmap on Windows; use normal file I/O instead.
-        // `with_use_mmap` doesn't exist in llama-cpp-2 0.1.138, so we write the field directly.
-        #[cfg(target_os = "windows")]
-        unsafe {
-            let raw = &mut params as *mut LlamaModelParams
-                as *mut llama_cpp_sys_2::llama_model_params;
-            (*raw).use_mmap = false;
-        }
-
-        #[cfg(feature = "vulkan")]
-        {
-            params = params.with_n_gpu_layers(1000); // Offload allt till GPU
-        }
-        #[cfg(feature = "metal")]
-        {
-            params = params.with_n_gpu_layers(1000); // Offload allt till GPU
-        }
-
-        // Log whether our unsafe write actually took effect (will be added to log_msgs below)
-        let mmap_check = format!("params.use_mmap() after set: {}", params.use_mmap());
-
-        let path_obj = Path::new(path);
-
-        // --- DEBUG LOGGING FÖR WINDOWS ---
-        let desktop_path = dirs::desktop_dir().unwrap_or_else(|| std::path::PathBuf::from("C:\\"));
-        let log_file = desktop_path.join("loke_debug_log.txt");
-        
-        let file_size = std::fs::metadata(&path_obj).map(|m| m.len()).unwrap_or(0);
-        let mut log_msgs = vec![
-            format!("=== LADDAR MODELL ==="),
-            format!("Path_str: {}", path),
-            format!("Path exists: {}", path_obj.exists()),
-            format!("Path is_file: {}", path_obj.is_file()),
-            format!("File size: {} bytes", file_size),
-            mmap_check,
-        ];
-
-        // 1. Verify Rust can actually read the file natively (Checks for Windows Defender locks)
-        match std::fs::File::open(&path_obj) {
-            Ok(mut f) => {
-                use std::io::Read;
-                let mut magic = [0u8; 4];
-                if let Err(e) = f.read_exact(&mut magic) {
-                    log_msgs.push(format!("Kunde inte läsa GGUF-hörfilen: {}", e));
-                    return Err(format!("Kunde inte läsa GGUF-hörfilen: {}", e));
-                }
-                log_msgs.push(format!("Magic bytes: {:?}", magic));
-                log_msgs.push(format!("Magic bytes som string: {:?}", String::from_utf8_lossy(&magic)));
-                // Check for GGUF magic standard
-                if &magic != b"GGUF" {
-                    log_msgs.push(format!("VARNING: Filen är inte GGUF!"));
-                }
-            }
-            Err(e) => {
-                return Err(format!("Rust OS Fel: Filen kan inte öppnas av operativsystemet (förmodligen låst av Windows Defender eller fel sökväg): {:?}", e));
+        // Don't restart if same model already loaded
+        if self.model_path.as_deref() == Some(path) && self.server_process.is_some() {
+            if self.server_is_alive() {
+                return Ok(());
             }
         }
 
-        // 2. Convert path to a form that llama.cpp's C fopen() can handle.
-        // See `to_llama_safe_path` above for full explanation.
-        let safe_path_str = to_llama_safe_path(path);
-        log_msgs.push(format!("Safe path for llama.cpp: {}", safe_path_str));
-        let safe_path = Path::new(&safe_path_str);
+        self.kill_server();
 
-        // Diagnostic: try vocab_only load – loads just the tokeniser, not the weights.
-        // If this succeeds but full load fails → issue is with weight loading (memory/GPU).
-        // If this also fails → llama.cpp can't even open the file.
-        {
-            let vocab_params = LlamaModelParams::default().with_vocab_only(true);
-            let vocab_res = LlamaModel::load_from_file(&self.backend, safe_path, &vocab_params);
-            log_msgs.push(format!(
-                "vocab_only test: {}",
-                if vocab_res.is_ok() { "OK – llama.cpp can open the file" } else { "FAIL – llama.cpp cannot open the file at all" }
+        let binary = self
+            .server_binary
+            .as_ref()
+            .ok_or("llama-server binary saknas – ladda ner den först")?
+            .clone();
+
+        if !binary.exists() {
+            return Err(format!(
+                "llama-server binary hittades inte: {}",
+                binary.display()
             ));
         }
 
-        // First attempt: with GPU layers.
-        // Capture llama.cpp's own stderr so it ends up in the debug log.
+        let port = free_port()?;
+
+        let mut cmd = Command::new(&binary);
+        cmd.arg("--model").arg(path);
+        cmd.arg("--port").arg(port.to_string());
+        cmd.arg("--host").arg("127.0.0.1");
+        cmd.arg("--ctx-size").arg("8192");
+        cmd.arg("--n-predict").arg("1024");
+        // Log to stderr; suppress stdout noise
+        cmd.stdout(Stdio::null());
+        cmd.stderr(Stdio::null());
+
+        // On Windows: hide the console window
         #[cfg(target_os = "windows")]
-        let stderr_file = desktop_path.join("loke_llama_stderr.txt");
-
-        #[cfg(target_os = "windows")]
-        let (mut model_res, gpu_stderr) = with_captured_stderr(&stderr_file, || {
-            LlamaModel::load_from_file(&self.backend, safe_path, &params)
-        });
-        #[cfg(not(target_os = "windows"))]
-        let mut model_res = LlamaModel::load_from_file(&self.backend, safe_path, &params);
-
-        #[cfg(target_os = "windows")]
-        log_msgs.push(format!("llama.cpp GPU stderr:\n{}", gpu_stderr.trim()));
-
-        log_msgs.push(format!("GPU res is_err: {}", model_res.is_err()));
-        // Fallback: If GPU load fails, retry on CPU
-        if let Err(e) = &model_res {
-            log_msgs.push(format!("GPU Error: {:?}", e));
-
-            let cpu_params = LlamaModelParams::default().with_n_gpu_layers(0);
-            #[cfg(target_os = "windows")]
-            unsafe {
-                let raw = &cpu_params as *const LlamaModelParams
-                    as *mut llama_cpp_sys_2::llama_model_params;
-                (*raw).use_mmap = false;
-            }
-
-            #[cfg(target_os = "windows")]
-            let (cpu_res, cpu_stderr) = with_captured_stderr(&stderr_file, || {
-                LlamaModel::load_from_file(&self.backend, safe_path, &cpu_params)
-            });
-            #[cfg(not(target_os = "windows"))]
-            let cpu_res = LlamaModel::load_from_file(&self.backend, safe_path, &cpu_params);
-
-            #[cfg(target_os = "windows")]
-            log_msgs.push(format!("llama.cpp CPU stderr:\n{}", cpu_stderr.trim()));
-
-            if let Err(cpu_e) = &cpu_res {
-                log_msgs.push(format!("CPU Error: {:?}", cpu_e));
-            } else {
-                log_msgs.push(format!("CPU load succeeded!"));
-            }
-            model_res = cpu_res;
-        } else {
-            log_msgs.push(format!("GPU load succeeded!"));
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
         }
 
-            let final_log = log_msgs.join("\n");
-            let _ = std::fs::write(&log_file, final_log);
+        let child = cmd
+            .spawn()
+            .map_err(|e| format!("Kunde inte starta llama-server: {}", e))?;
 
-            let model = model_res
-                .map_err(|e| format!("Kunde inte ladda modell från '{}': {:?}", path, e))?;
-
-        self.model = Some(model);
+        self.server_process = Some(child);
+        self.port = Some(port);
         self.model_path = Some(path.to_string());
+
+        // Wait for the server to become ready (up to 120 seconds for large models)
+        wait_for_server(port, Duration::from_secs(120))?;
+
         Ok(())
     }
 
     pub fn is_loaded(&self) -> bool {
-        self.model.is_some()
+        self.model_path.is_some() && self.port.is_some() && self.server_is_alive()
+    }
+
+    fn server_is_alive(&self) -> bool {
+        let Some(port) = self.port else {
+            return false;
+        };
+        // Quick TCP probe
+        std::net::TcpStream::connect_timeout(
+            &format!("127.0.0.1:{}", port).parse().unwrap(),
+            Duration::from_millis(200),
+        )
+        .is_ok()
     }
 
     pub fn generate(
         &self,
-        prompt: &str,
+        messages: &[serde_json::Value],
         max_tokens: u32,
         app: &AppHandle,
         session_id: &str,
     ) -> Result<String, String> {
-        let model = self
-            .model
-            .as_ref()
-            .ok_or("Ingen modell laddad")?;
+        let port = self.port.ok_or("Ingen modell laddad")?;
+        let url = format!("http://127.0.0.1:{}/v1/chat/completions", port);
 
-        let n_ctx = 8192;
-        let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(NonZeroU32::new(n_ctx));
+        let body = serde_json::json!({
+            "model": "local",
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": 0.7,
+            "stream": true
+        });
 
-        let mut ctx = model
-            .new_context(&self.backend, ctx_params)
-            .map_err(|e| format!("Kontext-fel: {:?}", e))?;
+        // Use blocking HTTP with SSE parsing (runs in spawn_blocking context)
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(300))
+            .build()
+            .map_err(|e| format!("HTTP client fel: {}", e))?;
 
-        // Tokenize input
-        let tokens = model
-            .str_to_token(prompt, AddBos::Always)
-            .map_err(|e| format!("Tokeniseringsfel: {:?}", e))?;
+        let resp = client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .body(body.to_string())
+            .send()
+            .map_err(|e| format!("Inference-anrop misslyckades: {}", e))?;
 
-        // If the prompt is too long, we truncate it for safety to fit in context window
-        let max_prompt_tokens = (n_ctx - max_tokens - 10) as usize;
-        let tokens = if tokens.len() > max_prompt_tokens {
-            tokens[tokens.len() - max_prompt_tokens..].to_vec()
-        } else {
-            tokens
-        };
-
-        // Create batch with prompt tokens
-        // Default n_batch in llama.cpp is often 512 or 2048. We decode in chunks of 512 to be safe for Metal OOM and asserts.
-        let mut batch = LlamaBatch::new(512, 1);
-        let mut n_past = 0;
-        
-        for chunk in tokens.chunks(512) {
-            batch.clear();
-            for (i, token) in chunk.iter().enumerate() {
-                let is_last = (n_past + i) == tokens.len() - 1;
-                batch.add(*token, (n_past + i) as i32, &[0], is_last)
-                    .map_err(|e| format!("Batch-fel: {:?}", e))?;
-            }
-            
-            // Evaluate prompt chunk
-            ctx.decode(&mut batch)
-                .map_err(|e| format!("Avkodningsfel: {:?}", e))?;
-                
-            n_past += chunk.len();
+        if !resp.status().is_success() {
+            return Err(format!("llama-server svarade HTTP {}", resp.status()));
         }
 
-        // Setup sampler
-        let mut sampler = LlamaSampler::chain_simple([
-            LlamaSampler::temp(0.7),
-            LlamaSampler::top_p(0.9, 1),
-            LlamaSampler::dist(42),
-        ]);
+        let mut full_output = String::new();
+        let reader = BufReader::new(resp);
 
-        let mut output = String::new();
-        let mut n_cur = tokens.len() as i32;
+        for line in reader.lines() {
+            let line = line.map_err(|e| format!("Läsfel: {}", e))?;
+            if line.is_empty() || line == "data: [DONE]" {
+                continue;
+            }
+            let data = line.strip_prefix("data: ").unwrap_or(&line);
+            if data.is_empty() {
+                continue;
+            }
 
-        for _ in 0..max_tokens {
-            // Sample next token
-            let token = sampler.sample(&ctx, -1);
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(data) else {
+                continue;
+            };
 
-            // Check for end of generation
-            if model.is_eog_token(token) {
+            let token_text = json["choices"][0]["delta"]["content"]
+                .as_str()
+                .unwrap_or("");
+
+            if !token_text.is_empty() {
+                full_output.push_str(token_text);
+                let _ = app.emit(
+                    "chat-token",
+                    ChatToken {
+                        session_id: session_id.to_string(),
+                        token: token_text.to_string(),
+                        done: false,
+                    },
+                );
+            }
+
+            // Check for finish reason
+            if json["choices"][0]["finish_reason"].is_string() {
                 break;
             }
-
-            // Decode to string
-            #[allow(deprecated)]
-            let piece = model.token_to_str(token, llama_cpp_2::model::Special::Tokenize)
-                .unwrap_or_default();
-
-            output.push_str(&piece);
-
-            // Emit streaming token
-            let _ = app.emit(
-                "chat-token",
-                ChatToken {
-                    session_id: session_id.to_string(),
-                    token: piece.clone(),
-                    done: false,
-                },
-            );
-
-            // Prepare next batch
-            batch.clear();
-            batch.add(token, n_cur, &[0], true)
-                .map_err(|e| format!("Batch-fel: {:?}", e))?;
-
-            ctx.decode(&mut batch)
-                .map_err(|e| format!("Avkodningsfel: {:?}", e))?;
-
-            n_cur += 1;
         }
 
-        // Signal done
         let _ = app.emit(
             "chat-token",
             ChatToken {
@@ -398,14 +208,59 @@ impl InferenceEngine {
             },
         );
 
-        Ok(output)
+        Ok(full_output)
+    }
+}
+
+/// Find a free local TCP port by letting the OS assign one.
+fn free_port() -> Result<u16, String> {
+    TcpListener::bind("127.0.0.1:0")
+        .map(|l| l.local_addr().unwrap().port())
+        .map_err(|e| format!("Kunde inte hitta ledig port: {}", e))
+}
+
+/// Poll until the server accepts TCP connections and responds to /health, or timeout.
+fn wait_for_server(port: u16, timeout: Duration) -> Result<(), String> {
+    let addr: std::net::SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
+    let deadline = Instant::now() + timeout;
+
+    // Phase 1: wait for TCP
+    loop {
+        if Instant::now() > deadline {
+            return Err(format!(
+                "llama-server startade inte inom {}s",
+                timeout.as_secs()
+            ));
+        }
+        if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+
+    // Phase 2: wait for /health to return 200
+    let url = format!("http://127.0.0.1:{}/health", port);
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .map_err(|e| format!("HTTP client fel: {}", e))?;
+
+    loop {
+        if Instant::now() > deadline {
+            return Err("llama-server hälsa svarade inte i tid".to_string());
+        }
+        if let Ok(r) = client.get(&url).send() {
+            if r.status().is_success() {
+                return Ok(());
+            }
+        }
+        std::thread::sleep(Duration::from_millis(500));
     }
 }
 
 /// Thread-safe wrapper
 pub type SharedEngine = Arc<Mutex<InferenceEngine>>;
 
-pub fn create_engine() -> Result<SharedEngine, String> {
-    let engine = InferenceEngine::new()?;
-    Ok(Arc::new(Mutex::new(engine)))
+pub fn create_engine() -> SharedEngine {
+    Arc::new(Mutex::new(InferenceEngine::new()))
 }

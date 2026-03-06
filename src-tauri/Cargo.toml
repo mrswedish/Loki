@@ -1,6 +1,6 @@
 [package]
 name = "loke"
-version = "0.1.2"
+version = "0.1.38"
 description = "Loke – Lokal kontext expert"
 authors = ["mrswedish"]
 edition = "2021"
@@ -21,13 +21,6 @@ tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
-llama-cpp-2 = { version = "0.1", features = ["sampler"] }
-llama-cpp-sys-2 = "=0.1.138"
-reqwest = { version = "0.12", features = ["stream"] }
+reqwest = { version = "0.12", features = ["stream", "blocking", "json"] }
 futures-util = "0.3"
-
-[features]
-default = ["metal"]
-metal = ["llama-cpp-2/metal"]
-vulkan = ["llama-cpp-2/vulkan"]
-
+zip = "2"

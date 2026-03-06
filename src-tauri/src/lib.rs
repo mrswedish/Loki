@@ -4,6 +4,7 @@ use uuid::Uuid;
 use std::fs;
 use std::path::PathBuf;
 
+mod llama_server;
 mod model_download;
 mod inference;
 
@@ -155,12 +156,23 @@ fn delete_model_cmd(model_id: String, app: tauri::AppHandle) -> Result<(), Strin
 // ─── Inference ───────────────────────────────────────────
 
 #[tauri::command]
-fn load_model_cmd(
+async fn load_model_cmd(
     model_path: String,
     engine: tauri::State<'_, inference::SharedEngine>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let mut eng = engine.lock().map_err(|e| format!("Lock-fel: {}", e))?;
-    eng.load_model(&model_path)
+    // Ensure the llama-server binary is downloaded
+    let bin_path = llama_server::ensure_server_binary(&app).await?;
+
+    // Set the binary path and load the model (blocking work in spawn_blocking)
+    let engine_clone = engine.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let mut eng = engine_clone.lock().map_err(|e| format!("Lock-fel: {}", e))?;
+        eng.set_server_binary(bin_path);
+        eng.load_model(&model_path)
+    })
+    .await
+    .map_err(|e| format!("Tokio join error: {}", e))?
 }
 
 #[tauri::command]
@@ -170,12 +182,9 @@ async fn chat_stream(
     engine: tauri::State<'_, inference::SharedEngine>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    // Build a simple prompt from the message
-    // TODO: Use chat template from model for proper formatting
-    let prompt = format!(
-        "<start_of_turn>user\n{}\n<end_of_turn>\n<start_of_turn>model\n",
-        message
-    );
+    let messages = serde_json::json!([
+        {"role": "user", "content": message}
+    ]);
 
     let engine_clone = engine.inner().clone();
     let session_id_clone = session_id.clone();
@@ -184,7 +193,8 @@ async fn chat_stream(
     // Run inference on a blocking thread to avoid blocking the async runtime
     let result = tokio::task::spawn_blocking(move || {
         let eng = engine_clone.lock().map_err(|e| format!("Lock-fel: {}", e))?;
-        eng.generate(&prompt, 1024, &app_clone, &session_id_clone)
+        let msgs = messages.as_array().unwrap().clone();
+        eng.generate(&msgs, 1024, &app_clone, &session_id_clone)
     })
     .await
     .map_err(|e| format!("Tokio join error: {}", e))??;
@@ -334,8 +344,7 @@ fn read_text_file(file_path: String) -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let engine = inference::create_engine()
-        .expect("Kunde inte starta inference-motor");
+    let engine = inference::create_engine();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())

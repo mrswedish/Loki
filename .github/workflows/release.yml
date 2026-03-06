@@ -36,7 +36,6 @@ jobs:
           releaseBody: 'Se nedan för filer att ladda ner för Mac (DMG) och Windows (EXE).'
           releaseDraft: true
           prerelease: false
-          args: --features metal
 
   release-windows:
     runs-on: windows-latest
@@ -59,36 +58,20 @@ jobs:
           git config --system core.longpaths true
           Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -Force
 
-      - name: Install Vulkan SDK
-        uses: humbletim/install-vulkan-sdk@v1.2
-        with:
-          version: 1.4.309.0
-          cache: true
-
-      - name: Install Ninja
-        run: choco install ninja
-
       - name: Install Frontend Dependencies
         run: npm install
 
-      - name: Build and Release Tauri App (Windows Vulkan)
+      - name: Build and Release Tauri App (Windows)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CMAKE_GENERATOR: Ninja
           CARGO_TARGET_DIR: D:\t
-          RUSTFLAGS: -C target-feature=+crt-static
-          CFLAGS: /MT
-          CXXFLAGS: /MT
-          CMAKE_POLICY_DEFAULT_CMP0091: NEW
-          CMAKE_MSVC_RUNTIME_LIBRARY: MultiThreaded
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Loke ${{ github.ref_name }}'
           releaseBody: 'Se nedan för filer att ladda ner för Mac (DMG) och Windows (EXE).'
           releaseDraft: true
           prerelease: false
-          args: --features vulkan -- --no-default-features
 
       - name: Extract Project Version
         run: |
@@ -159,29 +142,3 @@ jobs:
           files: |
             Loke-setup.exe
 
-      - name: Build CPU-Only Diagnostic App
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CMAKE_GENERATOR: Ninja
-          CARGO_TARGET_DIR: D:\cpu
-          RUSTFLAGS: -C target-feature=+crt-static
-          CFLAGS: /MT
-          CXXFLAGS: /MT
-          CMAKE_POLICY_DEFAULT_CMP0091: NEW
-          CMAKE_MSVC_RUNTIME_LIBRARY: MultiThreaded
-        run: npm run tauri build -- -- --no-default-features
-
-      - name: Copy CPU Executable
-        run: |
-          $targetPath = "D:\cpu\release\loke.exe"
-          if (-not (Test-Path $targetPath)) {
-            $targetPath = "D:\cpu\x86_64-pc-windows-msvc\release\loke.exe"
-          }
-          Copy-Item -Path $targetPath -Destination "Loke-cpu.exe"
-
-      - name: Upload CPU Executable
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: |
-            Loke-cpu.exe

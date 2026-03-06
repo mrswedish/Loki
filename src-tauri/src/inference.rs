@@ -144,7 +144,14 @@ impl InferenceEngine {
         self.model = None;
         self.model_path = None;
 
+        // On Windows, llama.cpp's mmap (CreateFileMapping/MapViewOfFile) is silently blocked by
+        // Windows Defender and other security software scanning the model file, which causes
+        // NullResult without any error message. Disable mmap on Windows; use normal file I/O instead.
+        #[cfg(target_os = "windows")]
+        let mut params = LlamaModelParams::default().with_use_mmap(false);
+        #[cfg(not(target_os = "windows"))]
         let mut params = LlamaModelParams::default();
+
         #[cfg(feature = "vulkan")]
         {
             params = params.with_n_gpu_layers(1000); // Offload allt till GPU
@@ -216,6 +223,9 @@ impl InferenceEngine {
         if let Err(e) = &model_res {
             log_msgs.push(format!("GPU Error: {:?}", e));
 
+            #[cfg(target_os = "windows")]
+            let cpu_params = LlamaModelParams::default().with_use_mmap(false).with_n_gpu_layers(0);
+            #[cfg(not(target_os = "windows"))]
             let cpu_params = LlamaModelParams::default().with_n_gpu_layers(0);
 
             #[cfg(target_os = "windows")]

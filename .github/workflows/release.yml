@@ -24,7 +24,7 @@ jobs:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
 
       - name: Install Frontend Dependencies
-        run: npm install
+        run: npm --prefix webui install
 
       - name: Build and Release Tauri App (Mac Metal)
         uses: tauri-apps/tauri-action@v0
@@ -59,7 +59,7 @@ jobs:
           Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -Force
 
       - name: Install Frontend Dependencies
-        run: npm install
+        run: npm --prefix webui install
 
       - name: Build and Release Tauri App (Windows)
         uses: tauri-apps/tauri-action@v0

@@ -21,6 +21,25 @@ pub fn ensure_dirs(app: &tauri::AppHandle) {
 	}
 }
 
+// ─── System Info ─────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct SystemInfo {
+	pub total_ram_gb: f32,
+	pub available_ram_gb: f32,
+}
+
+#[tauri::command]
+fn get_system_info() -> SystemInfo {
+	use sysinfo::System;
+	let mut sys = System::new();
+	sys.refresh_memory();
+	SystemInfo {
+		total_ram_gb: sys.total_memory() as f32 / (1024.0 * 1024.0 * 1024.0),
+		available_ram_gb: sys.available_memory() as f32 / (1024.0 * 1024.0 * 1024.0),
+	}
+}
+
 // ─── Data Types ──────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,6 +168,8 @@ pub fn run() {
 			start_server,
 			stop_server,
 			get_server_url,
+			// System
+			get_system_info,
 		])
 		.run(tauri::generate_context!())
 		.expect("error while running tauri application");

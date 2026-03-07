@@ -6,10 +6,12 @@
 		startServer,
 		downloadModel,
 		deleteModel,
+		getSystemInfo,
 		onDownloadProgress,
 		type ModelInfo,
 		type ModelStatus,
-		type DownloadProgress
+		type DownloadProgress,
+		type SystemInfo
 	} from '$lib/tauri-bridge';
 	import { serverStore } from '$lib/stores/server.svelte';
 
@@ -17,6 +19,7 @@
 
 	let localModels = $state<ModelInfo[]>([]);
 	let availableModels = $state<ModelStatus[]>([]);
+	let systemInfo = $state<SystemInfo>({ total_ram_gb: 0, available_ram_gb: 0 });
 	let loading = $state(true);
 	let starting = $state(false);
 	let downloading = $state<string | null>(null);
@@ -37,9 +40,10 @@
 		loading = true;
 		error = null;
 		try {
-			[localModels, availableModels] = await Promise.all([
+			[localModels, availableModels, systemInfo] = await Promise.all([
 				listLocalModels(),
-				listAvailableModels()
+				listAvailableModels(),
+				getSystemInfo()
 			]);
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
@@ -101,11 +105,21 @@
 	let notDownloaded = $derived(availableModels.filter((m) => !m.downloaded));
 
 	const flavorColors: Record<string, string> = {
-		'Snabb': 'bg-green-500/15 text-green-600 dark:text-green-400',
 		'Kompakt': 'bg-blue-500/15 text-blue-600 dark:text-blue-400',
-		'Balanserad': 'bg-violet-500/15 text-violet-600 dark:text-violet-400',
+		'Vision': 'bg-cyan-500/15 text-cyan-600 dark:text-cyan-400',
 		'Analytisk': 'bg-orange-500/15 text-orange-600 dark:text-orange-400',
+		'Balanserad': 'bg-violet-500/15 text-violet-600 dark:text-violet-400',
+		'Kraftfull': 'bg-red-500/15 text-red-600 dark:text-red-400',
 	};
+
+	function ramStatus(model: ModelStatus): 'ok' | 'tight' | 'insufficient' {
+		if (!systemInfo.available_ram_gb || !model.ram_required_gb) return 'ok';
+		const avail = systemInfo.available_ram_gb;
+		const req = model.ram_required_gb;
+		if (req > avail * 1.1) return 'insufficient';
+		if (req > avail * 0.85) return 'tight';
+		return 'ok';
+	}
 </script>
 
 <div class="bg-background fixed inset-0 z-[9999] flex items-center justify-center">
@@ -160,6 +174,11 @@
 											<span class="text-foreground text-sm font-medium">{model.name}</span>
 											{#if model.flavor}
 												<span class="rounded-full px-2 py-0.5 text-xs font-medium {flavorColors[model.flavor] ?? 'bg-muted text-muted-foreground'}">{model.flavor}</span>
+											{/if}
+											{#if ramStatus(model) === 'insufficient'}
+												<span title="Troligen för lite RAM ({model.ram_required_gb} GB krävs, {systemInfo.available_ram_gb.toFixed(1)} GB tillgängligt)" class="text-red-500 text-xs">⚠ RAM</span>
+											{:else if ramStatus(model) === 'tight'}
+												<span title="Kan vara trög ({model.ram_required_gb} GB krävs, {systemInfo.available_ram_gb.toFixed(1)} GB tillgängligt)" class="text-yellow-500 text-xs">⚠</span>
 											{/if}
 										</div>
 										<span class="text-muted-foreground text-xs">{formatSize(model.size_bytes)}</span>
@@ -225,6 +244,11 @@
 											{#if model.flavor}
 												<span class="rounded-full px-2 py-0.5 text-xs font-medium {flavorColors[model.flavor] ?? 'bg-muted text-muted-foreground'}">{model.flavor}</span>
 											{/if}
+											{#if ramStatus(model) === 'insufficient'}
+												<span title="Troligen för lite RAM ({model.ram_required_gb} GB krävs, {systemInfo.available_ram_gb.toFixed(1)} GB tillgängligt)" class="text-red-500 text-xs">⚠ RAM</span>
+											{:else if ramStatus(model) === 'tight'}
+												<span title="Kan vara trög ({model.ram_required_gb} GB krävs, {systemInfo.available_ram_gb.toFixed(1)} GB tillgängligt)" class="text-yellow-500 text-xs">⚠</span>
+											{/if}
 										</div>
 										{#if model.size_bytes > 0}
 											<span class="text-muted-foreground ml-2 text-xs"
@@ -266,6 +290,12 @@
 			{#if localModels.length === 0 && notDownloaded.length === 0 && registryDownloaded.length === 0}
 				<p class="text-muted-foreground text-sm">Inga modeller hittades.</p>
 			{/if}
+		{/if}
+
+		{#if systemInfo.total_ram_gb > 0}
+			<p class="text-muted-foreground text-xs">
+				RAM: {systemInfo.available_ram_gb.toFixed(1)} GB tillgängligt / {systemInfo.total_ram_gb.toFixed(1)} GB totalt
+			</p>
 		{/if}
 	</div>
 </div>

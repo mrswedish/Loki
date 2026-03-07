@@ -26,7 +26,13 @@ export interface ModelStatus {
 	size_bytes: number;
 	description: string;
 	flavor: string;
+	ram_required_gb: number;
 	downloaded: boolean;
+}
+
+export interface SystemInfo {
+	total_ram_gb: number;
+	available_ram_gb: number;
 }
 
 /**
@@ -80,6 +86,12 @@ export async function downloadModel(modelId: string): Promise<string> {
 /** Radera en nedladdad modell */
 export async function deleteModel(modelId: string): Promise<void> {
 	return invoke<void>('delete_model_cmd', { modelId });
+}
+
+/** Hämta systeminformation (RAM) */
+export async function getSystemInfo(): Promise<SystemInfo> {
+	if (!isTauriEnv()) return { total_ram_gb: 0, available_ram_gb: 0 };
+	return invoke<SystemInfo>('get_system_info');
 }
 
 export interface DownloadProgress {

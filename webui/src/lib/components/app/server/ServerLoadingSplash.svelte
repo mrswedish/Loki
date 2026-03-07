@@ -8,7 +8,7 @@
 		message?: string;
 	}
 
-	let { class: className = '', message = 'Ansluter till Loke-servern...' }: Props =
+	let { class: className = '', message = 'Ansluter till Loki-servern...' }: Props =
 		$props();
 </script>
 

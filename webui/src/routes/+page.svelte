@@ -88,7 +88,7 @@
 </script>
 
 <svelte:head>
-	<title>Loke – Lokal kontext expert</title>
+	<title>Loki – Lokal AI-chat</title>
 </svelte:head>
 
 <ChatScreen showCenteredEmpty />

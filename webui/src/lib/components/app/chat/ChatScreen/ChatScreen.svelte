@@ -428,7 +428,7 @@
 	>
 		<div class="w-full max-w-[48rem] px-4">
 			<div class="mb-10 text-center" in:fade={{ duration: 300 }}>
-				<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">Loke</h1>
+				<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">Loki</h1>
 
 				<p class="text-muted-foreground md:text-lg">
 					{serverStore.props?.modalities?.audio

@@ -166,7 +166,7 @@
 </script>
 
 <svelte:head>
-	<title>{activeConversation()?.name || 'Chat'} - Loke</title>
+	<title>{activeConversation()?.name || 'Chat'} - Loki</title>
 </svelte:head>
 
 <ChatScreen />

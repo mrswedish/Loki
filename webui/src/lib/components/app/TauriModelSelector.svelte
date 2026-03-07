@@ -99,6 +99,13 @@
 	// Registry-modeller som är nedladdade (för radera-knapp)
 	let registryDownloaded = $derived(availableModels.filter((m) => m.downloaded));
 	let notDownloaded = $derived(availableModels.filter((m) => !m.downloaded));
+
+	const flavorColors: Record<string, string> = {
+		'Snabb': 'bg-green-500/15 text-green-600 dark:text-green-400',
+		'Kompakt': 'bg-blue-500/15 text-blue-600 dark:text-blue-400',
+		'Balanserad': 'bg-violet-500/15 text-violet-600 dark:text-violet-400',
+		'Analytisk': 'bg-orange-500/15 text-orange-600 dark:text-orange-400',
+	};
 </script>
 
 <div class="bg-background fixed inset-0 z-[9999] flex items-center justify-center">
@@ -149,9 +156,17 @@
 									class="hover:bg-accent w-full rounded-md p-3 text-left transition-colors disabled:opacity-60"
 								>
 									<div class="flex items-center justify-between pr-6">
-										<span class="text-foreground text-sm font-medium">{model.name}</span>
+										<div class="flex items-center gap-2">
+											<span class="text-foreground text-sm font-medium">{model.name}</span>
+											{#if model.flavor}
+												<span class="rounded-full px-2 py-0.5 text-xs font-medium {flavorColors[model.flavor] ?? 'bg-muted text-muted-foreground'}">{model.flavor}</span>
+											{/if}
+										</div>
 										<span class="text-muted-foreground text-xs">{formatSize(model.size_bytes)}</span>
 									</div>
+									{#if model.description}
+										<p class="text-muted-foreground mt-0.5 text-xs">{model.description}</p>
+									{/if}
 								</button>
 								<!-- Delete button -->
 								<button
@@ -205,11 +220,19 @@
 							<div class="border-border rounded-md border p-3">
 								<div class="flex items-center justify-between">
 									<div>
-										<span class="text-foreground text-sm font-medium">{model.name}</span>
+										<div class="flex items-center gap-2">
+											<span class="text-foreground text-sm font-medium">{model.name}</span>
+											{#if model.flavor}
+												<span class="rounded-full px-2 py-0.5 text-xs font-medium {flavorColors[model.flavor] ?? 'bg-muted text-muted-foreground'}">{model.flavor}</span>
+											{/if}
+										</div>
 										{#if model.size_bytes > 0}
 											<span class="text-muted-foreground ml-2 text-xs"
 												>{formatSize(model.size_bytes)}</span
 											>
+										{/if}
+										{#if model.description}
+											<p class="text-muted-foreground text-xs">{model.description}</p>
 										{/if}
 									</div>
 									<button

@@ -8,7 +8,7 @@
 		message?: string;
 	}
 
-	let { class: className = '', message = 'Initializing connection to llama.cpp server...' }: Props =
+	let { class: className = '', message = 'Ansluter till Loke-servern...' }: Props =
 		$props();
 </script>
 
@@ -19,7 +19,7 @@
 				<Server class="h-8 w-8 animate-pulse text-muted-foreground" />
 			</div>
 
-			<h2 class="mb-2 text-xl font-semibold">Connecting to Server</h2>
+			<h2 class="mb-2 text-xl font-semibold">Ansluter till server</h2>
 
 			<p class="text-sm text-muted-foreground">
 				{message}

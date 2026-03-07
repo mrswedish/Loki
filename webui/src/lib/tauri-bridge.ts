@@ -24,6 +24,8 @@ export interface ModelStatus {
 	name: string;
 	filename: string;
 	size_bytes: number;
+	description: string;
+	flavor: string;
 	downloaded: boolean;
 }
 

@@ -59,7 +59,7 @@
 		onSystemPromptClick?.();
 	}
 
-	const fileUploadTooltipText = 'Add files, system prompt or MCP Servers';
+	const fileUploadTooltipText = 'Bifoga filer eller lägg till systemprompt';
 
 	const sheetItemClass =
 		'flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent active:bg-accent disabled:cursor-not-allowed disabled:opacity-50';
@@ -81,10 +81,10 @@
 
 		<Sheet.Content side="bottom" class="max-h-[85vh] gap-0">
 			<Sheet.Header>
-				<Sheet.Title>Add to chat</Sheet.Title>
+				<Sheet.Title>Bifoga till chatten</Sheet.Title>
 
 				<Sheet.Description class="sr-only">
-					Add files, system prompt or configure MCP servers
+					Bifoga filer eller konfigurera systemprompt
 				</Sheet.Description>
 			</Sheet.Header>
 
@@ -98,10 +98,10 @@
 				>
 					<FILE_TYPE_ICONS.image class="h-4 w-4 shrink-0" />
 
-					<span>Images</span>
+					<span>Bilder</span>
 
 					{#if !hasVisionModality}
-						<span class="ml-auto text-xs text-muted-foreground">Requires vision model</span>
+						<span class="ml-auto text-xs text-muted-foreground">Kräver vision-modell</span>
 					{/if}
 				</button>
 
@@ -114,56 +114,35 @@
 				>
 					<FILE_TYPE_ICONS.audio class="h-4 w-4 shrink-0" />
 
-					<span>Audio Files</span>
+					<span>Ljudfiler</span>
 
 					{#if !hasAudioModality}
-						<span class="ml-auto text-xs text-muted-foreground">Requires audio model</span>
+						<span class="ml-auto text-xs text-muted-foreground">Kräver audiomodell</span>
 					{/if}
 				</button>
 
 				<button type="button" class={sheetItemClass} onclick={handleSheetFileUpload}>
 					<FILE_TYPE_ICONS.text class="h-4 w-4 shrink-0" />
 
-					<span>Text Files</span>
+					<span>Textfiler</span>
 				</button>
 
 				<button type="button" class={sheetItemClass} onclick={handleSheetFileUpload}>
 					<FILE_TYPE_ICONS.pdf class="h-4 w-4 shrink-0" />
 
-					<span>PDF Files</span>
+					<span>PDF-filer</span>
 
 					{#if !hasVisionModality}
-						<span class="ml-auto text-xs text-muted-foreground">Text-only</span>
+						<span class="ml-auto text-xs text-muted-foreground">Endast text</span>
 					{/if}
 				</button>
 
 				<button type="button" class={sheetItemClass} onclick={handleSheetSystemPromptClick}>
 					<MessageSquare class="h-4 w-4 shrink-0" />
 
-					<span>System Message</span>
+					<span>Systemmeddelande</span>
 				</button>
 
-				<button type="button" class={sheetItemClass} onclick={handleMcpSettingsClick}>
-					<McpLogo class="h-4 w-4 shrink-0" />
-
-					<span>MCP Servers</span>
-				</button>
-
-				{#if hasMcpPromptsSupport}
-					<button type="button" class={sheetItemClass} onclick={handleMcpPromptClick}>
-						<Zap class="h-4 w-4 shrink-0" />
-
-						<span>MCP Prompt</span>
-					</button>
-				{/if}
-
-				{#if hasMcpResourcesSupport}
-					<button type="button" class={sheetItemClass} onclick={handleMcpResourcesClick}>
-						<FolderOpen class="h-4 w-4 shrink-0" />
-
-						<span>MCP Resources</span>
-					</button>
-				{/if}
 			</div>
 		</Sheet.Content>
 	</Sheet.Root>

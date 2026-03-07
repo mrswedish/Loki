@@ -118,7 +118,7 @@
 	<Sidebar.Header class=" top-0 z-10 gap-6 bg-sidebar/50 px-4 py-4 pb-2 backdrop-blur-lg md:sticky">
 		<a href="#/" onclick={handleMobileSidebarItemClick}>
 			<div class="px-2">
-				<h1 class="text-xl font-semibold">Loke – Lokal kontext expert</h1>
+				<h1 class="text-xl font-semibold">Loke</h1>
 				<p class="text-muted-foreground text-xs">byggd på llama.cpp</p>
 			</div>
 		</a>

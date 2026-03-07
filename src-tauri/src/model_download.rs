@@ -13,6 +13,7 @@ pub struct ModelEntry {
     pub url: String,
     pub size_bytes: u64,
     pub description: String,
+    pub flavor: String,
     pub is_default: bool,
 }
 
@@ -35,12 +36,23 @@ pub struct DownloadProgress {
 pub fn model_registry() -> Vec<ModelEntry> {
     vec![
         ModelEntry {
+            id: "qwen25-1b5".to_string(),
+            name: "Qwen 2.5 1.5B".to_string(),
+            filename: "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf".to_string(),
+            url: "https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf".to_string(),
+            size_bytes: 986_000_000,
+            description: "Qwen 2.5 – 1.5B params, Q4 (~1 GB)".to_string(),
+            flavor: "Snabb".to_string(),
+            is_default: false,
+        },
+        ModelEntry {
             id: "gemma-3n-e2b".to_string(),
             name: "Gemma 3n E2B".to_string(),
             filename: "google_gemma-3n-E2B-it-Q4_K_M.gguf".to_string(),
             url: "https://huggingface.co/bartowski/google_gemma-3n-E2B-it-GGUF/resolve/main/google_gemma-3n-E2B-it-Q4_K_M.gguf".to_string(),
             size_bytes: 1_850_000_000,
             description: "Google Gemma 3n – 2B params, Q4 (~1.7 GB)".to_string(),
+            flavor: "Kompakt".to_string(),
             is_default: false,
         },
         ModelEntry {
@@ -50,7 +62,18 @@ pub fn model_registry() -> Vec<ModelEntry> {
             url: "https://huggingface.co/ggml-org/Ministral-3-3B-Instruct-2512-GGUF/resolve/main/Ministral-3-3B-Instruct-2512-Q8_0.gguf".to_string(),
             size_bytes: 3_429_006_336,
             description: "Mistral 3B – Q8 (~3.2 GB)".to_string(),
+            flavor: "Balanserad".to_string(),
             is_default: true,
+        },
+        ModelEntry {
+            id: "gemma3-4b".to_string(),
+            name: "Gemma 3 4B".to_string(),
+            filename: "google_gemma-3-4b-it-Q4_K_M.gguf".to_string(),
+            url: "https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF/resolve/main/google_gemma-3-4b-it-Q4_K_M.gguf".to_string(),
+            size_bytes: 2_540_000_000,
+            description: "Google Gemma 3 4B – Q4 (~2.5 GB)".to_string(),
+            flavor: "Analytisk".to_string(),
+            is_default: false,
         },
     ]
 }

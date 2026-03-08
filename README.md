@@ -4,6 +4,8 @@
 
 Under huven drivs appen av [llama.cpp](https://github.com/ggml-org/llama.cpp) via en inbäddad server, med fullt stöd för ett brett urval av GGUF-modeller och blixtsnabb hårdvaruacceleration (Vulkan på Windows, Metal på macOS).
 
+![Loki skärmdump](assets/screenshot.png)
+
 ---
 
 ## Varför välja Loki?

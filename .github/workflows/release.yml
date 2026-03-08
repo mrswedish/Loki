@@ -1,0 +1,144 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  release-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - name: Install Dependencies
+        run: npm install && npm --prefix webui install
+
+      - name: Build and Release Tauri App (Mac Metal)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Loke ${{ github.ref_name }}'
+          releaseBody: 'Se nedan för filer att ladda ner för Mac (DMG) och Windows (EXE).'
+          releaseDraft: true
+          prerelease: false
+
+  release-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Enable Long Paths
+        run: |
+          git config --system core.longpaths true
+          Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -Force
+
+      - name: Install Dependencies
+        run: npm install && npm --prefix webui install
+
+      - name: Build and Release Tauri App (Windows)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_TARGET_DIR: D:\t
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Loke ${{ github.ref_name }}'
+          releaseBody: 'Se nedan för filer att ladda ner för Mac (DMG) och Windows (EXE).'
+          releaseDraft: true
+          prerelease: false
+
+      - name: Extract Project Version
+        run: |
+          $VERSION = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          echo "APP_VERSION=$VERSION" >> $env:GITHUB_ENV
+
+      - name: Copy Portable Executable
+        env:
+          CARGO_TARGET_DIR: D:\t
+        run: |
+          $targetPath = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "src-tauri/target" }
+          $exePaths = @(
+            "$targetPath/release/loke.exe",
+            "$targetPath/x86_64-pc-windows-msvc/release/loke.exe"
+          )
+          
+          $found = $false
+          foreach ($p in $exePaths) {
+            if (Test-Path $p) {
+              Copy-Item -Path $p -Destination "Loke-portable.exe"
+              $found = $true
+              break
+            }
+          }
+          
+          if (-not $found) {
+            Get-ChildItem -Path src-tauri/target -Filter "*.exe" -Recurse | Select-Object FullName
+            Write-Error "Could not find the executable."
+          }
+
+      - name: Upload Portable Executable
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            Loke-portable.exe
+
+      - name: Copy Setup Executable
+        env:
+          CARGO_TARGET_DIR: D:\t
+        run: |
+          $targetPath = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "src-tauri/target" }
+          $setupPaths = @(
+            "$targetPath/release/bundle/nsis",
+            "$targetPath/x86_64-pc-windows-msvc/release/bundle/nsis"
+          )
+          
+          $found = $false
+          foreach ($p in $setupPaths) {
+            if (Test-Path $p) {
+              $setupExe = Get-ChildItem -Path $p -Filter "*setup.exe" | Select-Object -First 1
+              if ($setupExe) {
+                Copy-Item -Path $setupExe.FullName -Destination "Loke-setup.exe"
+                $found = $true
+                break
+              }
+            }
+          }
+          
+          if (-not $found) {
+            Write-Warning "Could not find the NSIS setup executable."
+          }
+
+      - name: Upload Setup Executable
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            Loke-setup.exe
+

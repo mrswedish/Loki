@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(grep -v \"//.*fetch\")",
+      "Bash(npm install)",
+      "Bash(npm run build)",
+      "Bash(cargo check)",
+      "Bash(npm --prefix webui run build)",
+      "Bash(npx tauri dev)",
+      "Bash(where tauri)",
+      "Read(//c/Users/patri/.cargo/bin/**)",
+      "Bash(npm run dev)",
+      "Bash(grep -v \"^$\")",
+      "Bash(grep -v \"Building\\\\|Compiling\\\\|DEPRECATION\\\\|sass\\\\|scss\\\\|node_modules\\\\|katex\\\\|^$\")",
+      "Bash(taskkill /F /IM loke.exe)",
+      "Bash(powershell -Command \"Stop-Process -Name loke -Force -ErrorAction SilentlyContinue; Write-Output ''Done''\")",
+      "Bash(powershell -Command \"Get-Process | Where-Object {$_Name -eq ''loke'' -or $_Name -eq ''node''} | Stop-Process -Force -ErrorAction SilentlyContinue; Write-Output ''All killed''\")",
+      "Bash(powershell.exe -Command \"Stop-Process -Name loke -Force -ErrorAction Ignore; Stop-Process -Name ''loke-lib'' -Force -ErrorAction Ignore\")",
+      "Bash(powershell.exe -Command \"Get-Process loke -ErrorAction SilentlyContinue | Select-Object Name,Id,CPU\")",
+      "Bash(powershell.exe -Command \"Get-Process loke -ErrorAction SilentlyContinue | Select-Object Id, StartTime, CPU\")"
+    ]
+  }
+}

@@ -66,8 +66,8 @@ export async function listAvailableModels(): Promise<ModelStatus[]> {
 }
 
 /** Starta llama-server med vald modell. Returnerar server-URL. */
-export async function startServer(modelPath: string): Promise<string> {
-	const url = await invoke<string>('start_server', { modelPath });
+export async function startServer(modelPath: string, contextSize?: number): Promise<string> {
+	const url = await invoke<string>('start_server', { modelPath, contextSize });
 	setServerBase(url);
 	return url;
 }

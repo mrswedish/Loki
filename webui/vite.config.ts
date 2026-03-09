@@ -26,6 +26,7 @@ export default defineConfig({
 	css: {
 		preprocessorOptions: {
 			scss: {
+				quietDeps: true,
 				additionalData: `
 					$use-woff2: true;
 					$use-woff: false;

@@ -14,6 +14,7 @@
 		type SystemInfo
 	} from '$lib/tauri-bridge';
 	import { serverStore } from '$lib/stores/server.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 
 	let { onServerStarted, onCancel }: { onServerStarted?: () => void; onCancel?: () => void } = $props();
 
@@ -56,7 +57,8 @@
 		starting = true;
 		error = null;
 		try {
-			await startServer(modelPath);
+			const contextSize = settingsStore.config.contextSize as number;
+			await startServer(modelPath, contextSize);
 			await serverStore.fetch();
 			onServerStarted?.();
 		} catch (e) {

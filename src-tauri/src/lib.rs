@@ -115,6 +115,7 @@ fn delete_model_cmd(model_id: String, app: tauri::AppHandle) -> Result<(), Strin
 #[tauri::command]
 async fn start_server(
 	model_path: String,
+	context_size: Option<u32>,
 	engine: tauri::State<'_, inference::SharedEngine>,
 	app: tauri::AppHandle,
 ) -> Result<String, String> {
@@ -124,7 +125,7 @@ async fn start_server(
 	tokio::task::spawn_blocking(move || {
 		let mut eng = engine_clone.lock().map_err(|e| format!("Lock-fel: {}", e))?;
 		eng.set_server_binary(bin_path);
-		let port = eng.start(&model_path)?;
+		let port = eng.start(&model_path, context_size)?;
 		Ok(format!("http://127.0.0.1:{}", port))
 	})
 	.await

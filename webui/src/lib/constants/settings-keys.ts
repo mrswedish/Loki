@@ -9,6 +9,7 @@ export const SETTINGS_KEYS = {
 	THEME: 'theme',
 	API_KEY: 'apiKey',
 	SYSTEM_MESSAGE: 'systemMessage',
+	CONTEXT_SIZE: 'contextSize',
 	PASTE_LONG_TEXT_TO_FILE_LEN: 'pasteLongTextToFileLen',
 	COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT: 'copyTextAttachmentsAsPlainText',
 	ENABLE_CONTINUE_GENERATION: 'enableContinueGeneration',

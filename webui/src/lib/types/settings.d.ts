@@ -14,6 +14,9 @@ export interface SettingsFieldConfig {
 	isExperimental?: boolean;
 	help?: string;
 	options?: Array<{ value: string; label: string; icon?: typeof Icon }>;
+	min?: number;
+	max?: number;
+	step?: number;
 }
 
 export interface SettingsChatServiceOptions {

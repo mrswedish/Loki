@@ -125,25 +125,6 @@ pub fn list_models_with_status(app: &tauri::AppHandle) -> Vec<ModelStatus> {
         .collect()
 }
 
-pub fn get_default_model_path(app: &tauri::AppHandle) -> Option<String> {
-    let dir = models_dir(app);
-    model_registry()
-        .into_iter()
-        .find(|e| e.is_default)
-        .and_then(|entry| {
-            let path = dir.join(&entry.filename);
-            let legacy_filename = entry.filename.replace("-E2B", "_E2B");
-            let legacy_path = dir.join(&legacy_filename);
-
-            if path.exists() {
-                Some(path.to_string_lossy().to_string())
-            } else if legacy_path.exists() {
-                Some(legacy_path.to_string_lossy().to_string())
-            } else {
-                None
-            }
-        })
-}
 
 pub async fn download_model(model_id: String, app: AppHandle) -> Result<String, String> {
     let entry = model_registry()

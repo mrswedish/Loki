@@ -43,7 +43,7 @@ impl InferenceEngine {
 		self.port = None;
 	}
 
-	pub fn start(&mut self, path: &str) -> Result<u16, String> {
+	pub fn start(&mut self, path: &str, ctx_size: Option<u32>) -> Result<u16, String> {
 		// Don't restart if same model already loaded and server alive
 		if self.model_path.as_deref() == Some(path) && self.server_is_alive() {
 			return Ok(self.port.unwrap());
@@ -67,10 +67,23 @@ impl InferenceEngine {
 		cmd.arg("--model").arg(path);
 		cmd.arg("--port").arg(port.to_string());
 		cmd.arg("--host").arg("127.0.0.1");
-		cmd.arg("--ctx-size").arg("8192");
+		let ctx = ctx_size.unwrap_or(8192);
+		cmd.arg("--ctx-size").arg(ctx.to_string());
 		cmd.arg("--jinja");
-		cmd.stdout(Stdio::null());
-		cmd.stderr(Stdio::null());
+		
+		// Pipe output in debug mode so we can see what's happening
+		#[cfg(debug_assertions)]
+		{
+			cmd.stdout(Stdio::inherit());
+			cmd.stderr(Stdio::inherit());
+		}
+		#[cfg(not(debug_assertions))]
+		{
+			cmd.stdout(Stdio::null());
+			cmd.stderr(Stdio::null());
+		}
+
+		eprintln!("Starting llama-server: {} --model {} --port {}", binary.display(), path, port);
 
 		#[cfg(target_os = "windows")]
 		{
@@ -100,9 +113,6 @@ impl InferenceEngine {
 		self.port.map(|p| format!("http://127.0.0.1:{}", p))
 	}
 
-	pub fn is_running(&self) -> bool {
-		self.port.is_some() && self.server_is_alive()
-	}
 
 	fn server_is_alive(&self) -> bool {
 		let Some(port) = self.port else { return false; };
@@ -127,10 +137,10 @@ fn wait_for_server(port: u16, timeout: Duration) -> Result<(), String> {
 		if Instant::now() > deadline {
 			return Err(format!("llama-server startade inte inom {}s", timeout.as_secs()));
 		}
-		if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
+		if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok() {
 			break;
 		}
-		std::thread::sleep(Duration::from_millis(300));
+		std::thread::sleep(Duration::from_millis(500));
 	}
 
 	let url = format!("http://127.0.0.1:{}/health", port);
@@ -148,7 +158,7 @@ fn wait_for_server(port: u16, timeout: Duration) -> Result<(), String> {
 				return Ok(());
 			}
 		}
-		std::thread::sleep(Duration::from_millis(500));
+		std::thread::sleep(Duration::from_millis(1000));
 	}
 }
 

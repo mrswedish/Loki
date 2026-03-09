@@ -62,6 +62,14 @@
 					type: SettingsFieldType.INPUT
 				},
 				{
+					key: SETTINGS_KEYS.CONTEXT_SIZE,
+					label: 'Kontextfönster (tokens)',
+					type: SettingsFieldType.SLIDER,
+					min: 1024,
+					max: 65536,
+					step: 1024
+				},
+				{
 					key: SETTINGS_KEYS.COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT,
 					label: 'Kopiera textbilagor som ren text',
 					type: SettingsFieldType.CHECKBOX
@@ -148,7 +156,10 @@
 				{
 					key: SETTINGS_KEYS.TEMPERATURE,
 					label: 'Temperatur',
-					type: SettingsFieldType.INPUT
+					type: SettingsFieldType.SLIDER,
+					min: 0,
+					max: 2,
+					step: 0.1
 				},
 				{
 					key: SETTINGS_KEYS.DYNATEMP_RANGE,

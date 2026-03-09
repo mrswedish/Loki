@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { RotateCcw, FlaskConical } from '@lucide/svelte';
+	import { RotateCcw, FlaskConical, AlertCircle, Info } from '@lucide/svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Input } from '$lib/components/ui/input';
 	import Label from '$lib/components/ui/label/label.svelte';
@@ -8,17 +8,30 @@
 	import { SETTING_CONFIG_DEFAULT, SETTING_CONFIG_INFO, SETTINGS_KEYS } from '$lib/constants';
 	import { SettingsFieldType } from '$lib/enums/settings';
 	import { settingsStore } from '$lib/stores/settings.svelte';
+	import { serverStore } from '$lib/stores/server.svelte';
 	import { ChatSettingsParameterSourceIndicator } from '$lib/components/app';
+	import { getSystemInfo, type SystemInfo } from '$lib/tauri-bridge';
+	import { onMount } from 'svelte';
 	import type { Component } from 'svelte';
 
 	interface Props {
 		fields: SettingsFieldConfig[];
 		localConfig: SettingsConfigType;
-		onConfigChange: (key: string, value: string | boolean) => void;
+		onConfigChange: (key: string, value: string | boolean | number) => void;
 		onThemeChange?: (theme: string) => void;
 	}
 
 	let { fields, localConfig, onConfigChange, onThemeChange }: Props = $props();
+
+	let systemInfo = $state<SystemInfo | null>(null);
+
+	onMount(async () => {
+		try {
+			systemInfo = await getSystemInfo();
+		} catch (e) {
+			console.error('Failed to get system info:', e);
+		}
+	});
 
 	// Helper function to get parameter source info for syncable parameters
 	function getParameterSourceInfo(key: string) {
@@ -221,6 +234,98 @@
 			{#if field.help || SETTING_CONFIG_INFO[field.key]}
 				<p class="mt-1 text-xs text-muted-foreground">
 					{field.help || SETTING_CONFIG_INFO[field.key]}
+				</p>
+			{/if}
+		{:else if field.type === SettingsFieldType.SLIDER}
+			{@const paramInfo = getParameterSourceInfo(field.key)}
+			{@const currentValue = Number(localConfig[field.key] ?? SETTING_CONFIG_DEFAULT[field.key])}
+			{@const propsDefault = paramInfo?.serverDefault}
+			{@const isCustomRealTime = (() => {
+				if (!paramInfo || propsDefault === undefined) return false;
+				return currentValue !== propsDefault;
+			})()}
+
+			<div class="flex items-center justify-between gap-2">
+				<div class="flex items-center gap-2">
+					<Label for={field.key} class="flex items-center gap-1.5 text-sm font-medium">
+						{field.label}
+						{#if field.isExperimental}
+							<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+						{/if}
+					</Label>
+					{#if isCustomRealTime}
+						<ChatSettingsParameterSourceIndicator />
+					{/if}
+				</div>
+				<span class="text-xs font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground">
+					{currentValue}
+				</span>
+			</div>
+
+			<div class="flex items-center gap-4 w-full md:max-w-md">
+				<input
+					type="range"
+					id={field.key}
+					min={field.min ?? 0}
+					max={field.max ?? 100}
+					step={field.step ?? 1}
+					value={currentValue}
+					oninput={(e) => onConfigChange(field.key, Number(e.currentTarget.value))}
+					class="w-full h-1.5 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
+				/>
+				{#if isCustomRealTime}
+					<button
+						type="button"
+						onclick={() => {
+							settingsStore.resetParameterToServerDefault(field.key);
+							const defaultValue = propsDefault ?? SETTING_CONFIG_DEFAULT[field.key];
+							onConfigChange(field.key, Number(defaultValue));
+						}}
+						class="inline-flex h-5 w-5 items-center justify-center rounded transition-colors hover:bg-muted"
+						aria-label="Reset to default"
+						title="Reset to default"
+					>
+						<RotateCcw class="h-3 w-3" />
+					</button>
+				{/if}
+			</div>
+
+			{#if field.key === 'contextSize'}
+				{@const estimatedRamGb = (currentValue * 2 * 2 * 32) / (1024 * 1024 * 1024)}
+				<!-- rough estimate for FP16 KV cache: 2 bytes * 2 (K+V) * n_layer (approx 32) -->
+				{@const isHighRam = systemInfo && estimatedRamGb > systemInfo.available_ram_gb * 0.5}
+				{@const needsRestart = serverStore.contextSize !== null && serverStore.contextSize !== currentValue}
+
+				<div class="mt-2 space-y-2">
+					{#if isHighRam}
+						<div
+							class="flex items-start gap-2 p-2 rounded bg-destructive/10 border border-destructive/20 text-destructive text-xs"
+						>
+							<AlertCircle class="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+							<p>
+								Varning: Högt kontextfönster kan kräva mer RAM än vad som är ledigt ({estimatedRamGb.toFixed(
+									1
+								)} GB uppskattat). Appen kan bli instabil.
+							</p>
+						</div>
+					{/if}
+
+					{#if needsRestart}
+						<div
+							class="flex items-start gap-2 p-2 rounded bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 text-xs"
+						>
+							<Info class="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+							<p>
+								Ändringen slår igenom nästa gång du startar eller byter modell.
+							</p>
+						</div>
+					{/if}
+				</div>
+			{/if}
+
+			{#if field.help || SETTING_CONFIG_INFO[field.key]}
+				<p class="mt-1 text-xs text-muted-foreground">
+					{@html field.help || SETTING_CONFIG_INFO[field.key]}
 				</p>
 			{/if}
 		{:else if field.type === SettingsFieldType.CHECKBOX}

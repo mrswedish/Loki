@@ -7,9 +7,15 @@ const BINARY_NAME: &str = "llama-server.exe";
 #[cfg(not(target_os = "windows"))]
 const BINARY_NAME: &str = "llama-server";
 
+#[cfg(target_os = "windows")]
+const ASSET_EXTENSION: &str = ".zip";
+#[cfg(not(target_os = "windows"))]
+const ASSET_EXTENSION: &str = ".tar.gz";
+
 /// Returns the path where the llama-server binary should live.
 pub fn server_binary_path(app: &AppHandle) -> PathBuf {
-    crate::get_app_dir(app).join("bin").join(BINARY_NAME)
+    let key = platform_key();
+    crate::get_app_dir(app).join("bin").join(key).join(BINARY_NAME)
 }
 
 /// Ensure the llama-server binary exists; download + extract if not.
@@ -24,8 +30,15 @@ pub async fn ensure_server_binary(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("Kunde inte skapa bin-katalog: {}", e))?;
 
     let url = find_release_asset_url().await?;
-    let zip_bytes = download_zip(&url).await?;
-    extract_binary(&zip_bytes, &bin_dir)?;
+    let bytes = download_asset(&url).await?;
+    
+    if url.ends_with(".zip") {
+        extract_zip(&bytes, &bin_dir)?;
+    } else if url.ends_with(".tar.gz") {
+        extract_tgz(&bytes, &bin_dir)?;
+    } else {
+        return Err(format!("Okänt arkivformat för URL: {}", url));
+    }
 
     if !bin_path.exists() {
         return Err(format!(
@@ -45,22 +58,6 @@ pub async fn ensure_server_binary(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(bin_path)
 }
 
-/// Picks the right ZIP asset name pattern for the current platform.
-#[cfg(target_os = "windows")]
-fn asset_pattern() -> &'static str {
-    "llama-b*-bin-win-vulkan-x64.zip"
-}
-
-#[cfg(target_os = "macos")]
-fn asset_pattern() -> &'static str {
-    // Apple Silicon – metal build
-    "llama-b*-bin-macos-arm64.zip"
-}
-
-#[cfg(target_os = "linux")]
-fn asset_pattern() -> &'static str {
-    "llama-b*-bin-ubuntu-x64.zip"
-}
 
 /// Fetch latest release JSON from GitHub, find the right asset URL.
 async fn find_release_asset_url() -> Result<String, String> {
@@ -95,10 +92,10 @@ async fn find_release_asset_url() -> Result<String, String> {
         .find(|a| {
             a["name"]
                 .as_str()
-                .map(|n: &str| n.contains(platform_key) && n.ends_with(".zip"))
+                .map(|n: &str| n.contains(platform_key) && n.ends_with(ASSET_EXTENSION))
                 .unwrap_or(false)
         })
-        .ok_or_else(|| format!("Hittade ingen ZIP för platform '{}'", platform_key))?;
+        .ok_or_else(|| format!("Hittade ingen tillgång ({}) för platform '{}'", ASSET_EXTENSION, platform_key))?;
 
     asset["browser_download_url"]
         .as_str()
@@ -108,7 +105,12 @@ async fn find_release_asset_url() -> Result<String, String> {
 
 #[cfg(target_os = "windows")]
 fn platform_key() -> &'static str {
-    "bin-win-vulkan-x64"
+    // Check for NVIDIA CUDA
+    if std::path::Path::new("C:\\Windows\\System32\\nvcuda.dll").exists() {
+        "bin-win-cuda-12.4-x64"
+    } else {
+        "bin-win-vulkan-x64"
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -121,8 +123,8 @@ fn platform_key() -> &'static str {
     "bin-ubuntu-x64"
 }
 
-/// Download the ZIP from `url` and return raw bytes.
-async fn download_zip(url: &str) -> Result<Vec<u8>, String> {
+/// Download the asset (ZIP or TGZ) from `url` and return raw bytes.
+async fn download_asset(url: &str) -> Result<Vec<u8>, String> {
     let client = reqwest::Client::builder()
         .user_agent("loke-app")
         .build()
@@ -145,7 +147,7 @@ async fn download_zip(url: &str) -> Result<Vec<u8>, String> {
 }
 
 /// Extract `llama-server[.exe]` (and any DLLs needed on Windows) from ZIP bytes into `dest_dir`.
-fn extract_binary(zip_bytes: &[u8], dest_dir: &std::path::Path) -> Result<(), String> {
+fn extract_zip(zip_bytes: &[u8], dest_dir: &std::path::Path) -> Result<(), String> {
     use std::io::Cursor;
     let cursor = Cursor::new(zip_bytes);
     let mut archive =
@@ -173,6 +175,62 @@ fn extract_binary(zip_bytes: &[u8], dest_dir: &std::path::Path) -> Result<(), St
                 .map_err(|e| format!("Kunde inte skapa {}: {}", filename, e))?;
             std::io::copy(&mut entry, &mut out)
                 .map_err(|e| format!("Kunde inte skriva {}: {}", filename, e))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Extract `llama-server` from .tar.gz bytes into `dest_dir`.
+fn extract_tgz(tgz_bytes: &[u8], dest_dir: &std::path::Path) -> Result<(), String> {
+    use flate2::read::GzDecoder;
+    use tar::Archive;
+    use std::io::Cursor;
+
+    let decoder = GzDecoder::new(Cursor::new(tgz_bytes));
+    let mut archive = Archive::new(decoder);
+
+    for entry_result in archive.entries().map_err(|e| format!("TGZ entries-fel: {}", e))? {
+        let mut entry = entry_result.map_err(|e| format!("TGZ entry-fel: {}", e))?;
+        let path = entry.path().map_err(|e| format!("TGZ path-fel: {}", e))?.to_path_buf();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+        let is_lib = name.contains("libggml") || name.contains("libllama") || name.contains("libmtmd");
+        let should_extract = name == BINARY_NAME || is_lib;
+
+        if should_extract && !name.is_empty() {
+            let dest = dest_dir.join(name);
+            
+            // Handle symlinks or regular files
+            if entry.header().entry_type().is_symlink() {
+                #[cfg(unix)]
+                {
+                    if let Ok(Some(target)) = entry.link_name() {
+                        let _ = std::fs::remove_file(&dest); // Clear if exists
+                        
+                        // Symlinks in the tarball might be like "libllama.0.dylib -> libllama.0.0.8247.dylib"
+                        // Since we extract everything into one flat dir, we just link to the target name
+                        let target_name = target.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                        if !target_name.is_empty() {
+                            if let Err(e) = std::os::unix::fs::symlink(target_name, &dest) {
+                                eprintln!("Kunde inte skapa symlink {} -> {}: {}", name, target_name, e);
+                            }
+                        }
+                    }
+                }
+            } else {
+                let mut out = std::fs::File::create(&dest)
+                    .map_err(|e| format!("Kunde inte skapa {}: {}", name, e))?;
+                std::io::copy(&mut entry, &mut out)
+                    .map_err(|e| format!("Kunde inte skriva {}: {}", name, e))?;
+                
+                // Make executable on Unix
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755));
+                }
+            }
         }
     }
 

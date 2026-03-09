@@ -1,6 +1,6 @@
 /// Manages the llama-server subprocess lifecycle.
 use std::path::PathBuf;
-use std::net::{TcpListener, SocketAddr};
+use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -87,7 +87,7 @@ impl InferenceEngine {
 		}
 		
 		// Pipe output to a log file if log_dir is provided
-		if let Some(dir) = log_dir {
+		if let Some(dir) = &log_dir {
 			let log_path = dir.join("llama_server.log");
 			if let Ok(file) = std::fs::File::create(log_path) {
 				cmd.stdout(Stdio::from(file.try_clone().unwrap()));

@@ -24,7 +24,8 @@ export const NUMERIC_FIELDS = [
 	'dry_penalty_last_n',
 	'agenticMaxTurns',
 	'agenticMaxToolPreviewLines',
-	'contextSize'
+	'contextSize',
+	'gpuIndex'
 ] as const;
 
 /**

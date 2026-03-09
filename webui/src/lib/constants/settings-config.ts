@@ -54,8 +54,8 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	custom: '', // custom json-stringified object
 	contextSize: 8192,
 	// experimental features
-	pyInterpreterEnabled: false,
-	enableContinueGeneration: false
+	enableContinueGeneration: false,
+	gpuIndex: -1
 };
 
 export const SETTING_CONFIG_INFO: Record<string, string> = {
@@ -141,7 +141,9 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	pyInterpreterEnabled:
 		'Enable Python interpreter using Pyodide. Allows running Python code in markdown code blocks.',
 	enableContinueGeneration:
-		'Enable "Continue" button for assistant messages. Currently works only with non-reasoning models.'
+		'Enable "Continue" button for assistant messages. Currently works only with non-reasoning models.',
+	gpuIndex:
+		'Välj vilket grafikkort som ska användas (för system med dubbla GPU:er). -1 betyder Auto. Vanligtvis är 0 eller 1 det diskreta grafikkortet.'
 };
 
 export const SETTINGS_COLOR_MODES_CONFIG = [

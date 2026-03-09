@@ -46,7 +46,7 @@ impl InferenceEngine {
 		self.model_path = None;
 	}
 
-	pub fn start(&mut self, path: &str, ctx_size: Option<u32>) -> Result<u16, String> {
+	pub fn start(&mut self, path: &str, ctx_size: Option<u32>, gpu_index: Option<i32>) -> Result<u16, String> {
 		// Don't restart if same model already loaded and server alive
 		if self.model_path.as_deref() == Some(path) && self.server_is_alive() {
 			return Ok(self.port.unwrap());
@@ -77,11 +77,14 @@ impl InferenceEngine {
 
 		#[cfg(target_os = "windows")]
 		{
-			// Try to prioritize discrete GPU (NVIDIA or AMD) over Integrated (Intel)
-			// For Vulkan: 
-			cmd.env("GGML_VULKAN_DEVICE", "1"); // On laptops, 1 is usually the discrete GPU
-			// For CUDA:
-			cmd.env("CUDA_VISIBLE_DEVICES", "0");
+			let index = gpu_index.unwrap_or(-1);
+			if index >= 0 {
+				let index_str = index.to_string();
+				// For Vulkan:
+				cmd.env("GGML_VULKAN_DEVICE", &index_str);
+				// For CUDA:
+				cmd.env("CUDA_VISIBLE_DEVICES", &index_str);
+			}
 		}
 		
 		// Pipe output in debug mode so we can see what's happening

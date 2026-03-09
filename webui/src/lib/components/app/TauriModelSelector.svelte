@@ -58,7 +58,8 @@
 		error = null;
 		try {
 			const contextSize = settingsStore.config.contextSize as number;
-			await startServer(modelPath, contextSize);
+			const gpuIndex = settingsStore.config.gpuIndex as number;
+			await startServer(modelPath, contextSize, gpuIndex);
 			await serverStore.fetch();
 			onServerStarted?.();
 		} catch (e) {

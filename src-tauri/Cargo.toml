@@ -1,6 +1,6 @@
 [package]
 name = "loke"
-version = "0.1.42"
+version = "0.1.43"
 description = "Loki – Lokal AI-chat"
 authors = ["mrswedish"]
 edition = "2021"

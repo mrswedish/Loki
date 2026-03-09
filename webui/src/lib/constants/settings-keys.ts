@@ -56,5 +56,6 @@ export const SETTINGS_KEYS = {
 	// Developer
 	DISABLE_REASONING_PARSING: 'disableReasoningParsing',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',
+	GPU_INDEX: 'gpuIndex',
 	CUSTOM: 'custom'
 } as const;

@@ -323,6 +323,29 @@
 				</div>
 			{/if}
 
+			{#if field.key === 'contextSize'}
+				<div class="mt-4 pt-4 border-t border-border/50">
+					<div class="flex items-center gap-2 mb-2">
+						<Label for="gpuIndex" class="text-sm font-medium">Grafikkortsindex (GPU)</Label>
+						<FlaskConical class="h-3.5 w-3.5 text-muted-foreground transition-colors hover:text-primary" />
+					</div>
+					<div class="flex items-center gap-3">
+						<Input
+							id="gpuIndex"
+							type="number"
+							value={localConfig.gpuIndex ?? -1}
+							oninput={(e) => onConfigChange('gpuIndex', Number(e.currentTarget.value))}
+							placeholder="Auto (-1)"
+							class="w-full md:max-w-[100px] h-9"
+						/>
+						<p class="text-[11px] leading-tight text-muted-foreground max-w-[280px]">
+							<span class="font-medium text-foreground">Standard: Auto (-1)</span>. 
+							Använd 0 eller 1 för att tvinga fram rätt grafikkort på system med dubbla GPU:er (t.ex. bärbara).
+						</p>
+					</div>
+				</div>
+			{/if}
+
 			{#if field.help || SETTING_CONFIG_INFO[field.key]}
 				<p class="mt-1 text-xs text-muted-foreground">
 					{@html field.help || SETTING_CONFIG_INFO[field.key]}

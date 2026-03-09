@@ -62,7 +62,7 @@ pub async fn ensure_server_binary(app: &AppHandle) -> Result<PathBuf, String> {
 /// Fetch latest release JSON from GitHub, find the right asset URL.
 async fn find_release_asset_url() -> Result<String, String> {
     let client = reqwest::Client::builder()
-        .user_agent("loke-app")
+        .user_agent("loki-app")
         .build()
         .map_err(|e| format!("HTTP client error: {}", e))?;
 
@@ -123,7 +123,7 @@ fn platform_key() -> &'static str {
 /// Download the asset (ZIP or TGZ) from `url` and return raw bytes.
 async fn download_asset(url: &str) -> Result<Vec<u8>, String> {
     let client = reqwest::Client::builder()
-        .user_agent("loke-app")
+        .user_agent("loki-app")
         .build()
         .map_err(|e| format!("HTTP client error: {}", e))?;
 

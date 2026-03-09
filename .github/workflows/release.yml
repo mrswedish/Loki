@@ -35,7 +35,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'Loke ${{ github.ref_name }}'
+          releaseName: 'Loki ${{ github.ref_name }}'
           releaseBody: 'Se nedan för filer att ladda ner för Mac (DMG) och Windows (EXE).'
           releaseDraft: true
           prerelease: false
@@ -71,7 +71,7 @@ jobs:
           CARGO_TARGET_DIR: D:\t
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'Loke ${{ github.ref_name }}'
+          releaseName: 'Loki ${{ github.ref_name }}'
           releaseBody: 'Se nedan för filer att ladda ner för Mac (DMG) och Windows (EXE).'
           releaseDraft: true
           prerelease: false
@@ -87,14 +87,14 @@ jobs:
         run: |
           $targetPath = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "src-tauri/target" }
           $exePaths = @(
-            "$targetPath/release/loke.exe",
-            "$targetPath/x86_64-pc-windows-msvc/release/loke.exe"
+            "$targetPath/release/loki.exe",
+            "$targetPath/x86_64-pc-windows-msvc/release/loki.exe"
           )
           
           $found = $false
           foreach ($p in $exePaths) {
             if (Test-Path $p) {
-              Copy-Item -Path $p -Destination "Loke-portable.exe"
+              Copy-Item -Path $p -Destination "Loki-portable.exe"
               $found = $true
               break
             }
@@ -110,7 +110,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           files: |
-            Loke-portable.exe
+            Loki-portable.exe
 
       - name: Copy Setup Executable
         env:
@@ -127,7 +127,7 @@ jobs:
             if (Test-Path $p) {
               $setupExe = Get-ChildItem -Path $p -Filter "*setup.exe" | Select-Object -First 1
               if ($setupExe) {
-                Copy-Item -Path $setupExe.FullName -Destination "Loke-setup.exe"
+                Copy-Item -Path $setupExe.FullName -Destination "Loki-setup.exe"
                 $found = $true
                 break
               }
@@ -143,5 +143,5 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           files: |
-            Loke-setup.exe
+            Loki-setup.exe
 

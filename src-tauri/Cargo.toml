@@ -6,7 +6,7 @@ authors = ["mrswedish"]
 edition = "2021"
 
 [lib]
-name = "loke_lib"
+name = "loki_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

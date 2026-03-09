@@ -80,10 +80,8 @@ impl InferenceEngine {
 			let index = gpu_index.unwrap_or(-1);
 			if index >= 0 {
 				let index_str = index.to_string();
-				// For Vulkan:
-				cmd.env("GGML_VULKAN_DEVICE", &index_str);
-				// For CUDA:
-				cmd.env("CUDA_VISIBLE_DEVICES", &index_str);
+				// For Vulkan (primary backend on Windows for Loki)
+				cmd.env("GGML_VK_VISIBLE_DEVICES", &index_str);
 			}
 		}
 		

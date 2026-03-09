@@ -15,6 +15,9 @@
 	} from '$lib/components/app';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
+	import { serverStore } from '$lib/stores/server.svelte';
+	import { stopServer, startServer } from '$lib/tauri-bridge';
+	import { toast } from 'svelte-sonner';
 	import {
 		SETTINGS_SECTION_TITLES,
 		type SettingsSectionTitle,
@@ -277,6 +280,11 @@
 	let currentSection = $derived(
 		settingSections.find((section) => section.title === activeSection) || settingSections[0]
 	);
+	let needsRestart = $derived(
+		localConfig.contextSize !== (serverStore.contextSize ?? 2048) ||
+		localConfig.gpuIndex !== (serverStore.activeGpuIndex ?? -1)
+	);
+
 	let localConfig: SettingsConfigType = $state({ ...config() });
 
 	let canScrollLeft = $state(false);
@@ -311,6 +319,31 @@
 	function handleReset() {
 		localConfig = { ...config() };
 		applyTheme(localConfig.theme as string);
+	}
+
+	async function handleSaveAndRestart() {
+		const modelPath = serverStore.props?.model_path;
+		if (!modelPath) {
+			handleSave();
+			return;
+		}
+
+		handleSave();
+
+		const ctx = localConfig.contextSize as number;
+		const gpu = (localConfig.gpuIndex ?? -1) as number;
+
+		try {
+			toast.info('Startar om servern med nya inställningar...');
+			await stopServer();
+			await startServer(modelPath, ctx, gpu);
+			serverStore.activeGpuIndex = gpu;
+			await serverStore.fetch();
+			toast.success('Servern har startats om');
+			onSave?.();
+		} catch (e) {
+			toast.error('Kunde inte starta om: ' + (e instanceof Error ? e.message : String(e)));
+		}
 	}
 
 	function handleSave() {
@@ -495,4 +528,9 @@
 	</ScrollArea>
 </div>
 
-<ChatSettingsFooter onReset={handleReset} onSave={handleSave} />
+<ChatSettingsFooter
+	onReset={handleReset}
+	onSave={handleSave}
+	onSaveAndRestart={handleSaveAndRestart}
+	showRestartButton={needsRestart}
+/>

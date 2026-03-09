@@ -7,9 +7,11 @@
 	interface Props {
 		onReset?: () => void;
 		onSave?: () => void;
+		onSaveAndRestart?: () => void;
+		showRestartButton?: boolean;
 	}
 
-	let { onReset, onSave }: Props = $props();
+	let { onReset, onSave, onSaveAndRestart, showRestartButton }: Props = $props();
 
 	let showResetDialog = $state(false);
 
@@ -38,7 +40,20 @@
 		</Button>
 	</div>
 
-	<Button onclick={handleSave}>Spara inställningar</Button>
+	<div class="flex gap-3 items-center">
+		{#if showRestartButton}
+			<Button
+				variant="default"
+				onclick={onSaveAndRestart}
+				class="bg-gradient-to-r from-primary to-blue-600 hover:from-primary/90 hover:to-blue-600/90 shadow-md font-medium"
+			>
+				Spara och starta om
+			</Button>
+		{/if}
+		<Button onclick={handleSave} variant={showRestartButton ? 'outline' : 'default'}>
+			Spara {!showRestartButton ? 'inställningar' : ''}
+		</Button>
+	</div>
 </div>
 
 <AlertDialog.Root bind:open={showResetDialog}>

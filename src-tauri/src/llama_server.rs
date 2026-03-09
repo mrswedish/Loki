@@ -107,12 +107,7 @@ async fn find_release_asset_url() -> Result<String, String> {
 
 #[cfg(target_os = "windows")]
 fn platform_key() -> &'static str {
-    // Check for NVIDIA CUDA
-    if std::path::Path::new("C:\\Windows\\System32\\nvcuda.dll").exists() {
-        "bin-win-cuda-12.4-x64"
-    } else {
-        "bin-win-vulkan-x64"
-    }
+    "bin-win-vulkan-x64"
 }
 
 #[cfg(target_os = "macos")]

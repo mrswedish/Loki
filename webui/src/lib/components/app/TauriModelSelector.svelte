@@ -60,6 +60,7 @@
 			const contextSize = settingsStore.config.contextSize as number;
 			const gpuIndex = settingsStore.config.gpuIndex as number;
 			await startServer(modelPath, contextSize, gpuIndex);
+			serverStore.activeGpuIndex = gpuIndex ?? -1;
 			await serverStore.fetch();
 			onServerStarted?.();
 		} catch (e) {

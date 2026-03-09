@@ -30,6 +30,7 @@ class ServerStore {
 	loading = $state(false);
 	error = $state<string | null>(null);
 	role = $state<ServerRole | null>(null);
+	activeGpuIndex = $state<number>(-1);
 	private fetchPromise: Promise<void> | null = null;
 
 	/**

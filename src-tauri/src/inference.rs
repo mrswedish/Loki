@@ -72,7 +72,17 @@ impl InferenceEngine {
 		cmd.arg("--host").arg("127.0.0.1");
 		let ctx = ctx_size.unwrap_or(8192);
 		cmd.arg("--ctx-size").arg(ctx.to_string());
+		cmd.arg("--n-gpu-layers").arg("99");
 		cmd.arg("--jinja");
+
+		#[cfg(target_os = "windows")]
+		{
+			// Try to prioritize discrete GPU (NVIDIA or AMD) over Integrated (Intel)
+			// For Vulkan: 
+			cmd.env("GGML_VULKAN_DEVICE", "1"); // On laptops, 1 is usually the discrete GPU
+			// For CUDA:
+			cmd.env("CUDA_VISIBLE_DEVICES", "0");
+		}
 		
 		// Pipe output in debug mode so we can see what's happening
 		#[cfg(debug_assertions)]

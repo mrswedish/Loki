@@ -91,6 +91,17 @@ pub fn model_registry() -> Vec<ModelEntry> {
             ram_required_gb: 6.0,
             is_default: false,
         },
+        ModelEntry {
+            id: "phi-4-mini".to_string(),
+            name: "Phi-4 Mini".to_string(),
+            filename: "microsoft_Phi-4-mini-instruct-Q4_K_M.gguf".to_string(),
+            url: "https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_K_M.gguf".to_string(),
+            size_bytes: 2_491_874_688,
+            description: "Microsoft Phi-4 Mini – expert på logik, kod och Excel-formler, Q4 (~2.3 GB)".to_string(),
+            flavor: "Logik".to_string(),
+            ram_required_gb: 4.0,
+            is_default: false,
+        },
     ]
 }
 

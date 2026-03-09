@@ -615,11 +615,11 @@ class ChatStore {
 				assistantMessage.id
 			);
 
-			const mapPrompt = `Du är en hjälpsam assistent. Sammanfatta följande del av ett dokument kortfattat men behåll alla viktiga namn, datum och tekniska detaljer. Text:\n\n${chunks[i]}`;
+			const mapPrompt = `Sammanfatta följande del av ett dokument. Var objektiv och behåll alla viktiga namn, datum, tekniska detaljer och specifik fakta. Text:\n\n${chunks[i]}`;
 
 			const summary = await ChatService.sendMessage(
 				[{ role: MessageRole.USER, content: mapPrompt }],
-				{ stream: false, temperature: 0.1 }
+				{ stream: false, temperature: 0.0 }
 			);
 
 			if (summary) summaries.push(summary as string);
@@ -642,7 +642,18 @@ class ChatStore {
 
 		this.setChatStreaming(convId, `Skapar slutgiltigt svar...`, assistantMessage.id);
 
-		const finalPrompt = `Här är sammanfattningar av ett längre dokument indelat i ${chunks.length} delar. Baserat på dessa sammanfattningar, besvara användarens instruktion.\n\nAnvändarens instruktion: ${instruction}\n\nSammanfattningar:\n${summaries.join('\n\n---\n\n')}`;
+		const finalPrompt = `Du är Loki, en hjälpsam AI-assistent. Nedan följer information extraherad från ett längre dokument. Din uppgift är att besvara användarens fråga baserat på denna information.
+
+VIKTIGT: 
+1. Svara direkt till användaren. 
+2. Nämn INTE att du läser sammanfattningar eller att dokumentet var uppdelat. 
+3. Aggeras som om du har läst hela dokumentet själv.
+4. Om användaren ber om en sammanfattning, ge dem en sammanhängande och välstruktuerad sådan.
+
+Användarens fråga: "${instruction}"
+
+Information från dokumentet:
+${summaries.join('\n\n')}`;
 
 		// Now perform the final generation as a stream so the user sees it
 		await this.streamChatCompletion(

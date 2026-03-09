@@ -37,7 +37,7 @@ Loki är det perfekta verktyget för att bolla känsliga ämnen, effektivisera i
 ## Nyckelfunktioner
 
 * **100 % lokal AI** – All tankekraft genereras av din egen hårdvara, helt oberoende av molnet.
-* **Färdiga "smaker"** – Fem förvalda, optimerade modeller som laddas ner direkt i appen med ett klick.
+* **Färdiga "smaker"** – Sex förvalda, optimerade modeller som laddas ner direkt i appen med ett klick (nu inklusive Phi-4 Mini för logik och kod).
 * **Magisk Chunking (Map-Reduce)** – Appen känner automatiskt av om en text är för stor för kontextfönstret och delar upp den i bitar för att kunna sammanfatta timmar av material utan informationsförlust.
 * **Dynamiskt kontextstöd** – Justera storleken på AI-minnet (tokens) med en enkel slider för att optimera prestanda vs. RAM.
 * **Smart RAM-varning** – Appen beräknar minnesbehovet i realtid och varnar om inställningarna riskerar att överstiga din dators tillgängliga RAM.

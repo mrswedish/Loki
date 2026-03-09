@@ -37,10 +37,13 @@ impl InferenceEngine {
 
 	fn kill_server(&mut self) {
 		if let Some(mut child) = self.server_process.take() {
+			eprintln!("Killing llama-server process...");
 			let _ = child.kill();
 			let _ = child.wait();
+			eprintln!("llama-server process killed.");
 		}
 		self.port = None;
+		self.model_path = None;
 	}
 
 	pub fn start(&mut self, path: &str, ctx_size: Option<u32>) -> Result<u16, String> {

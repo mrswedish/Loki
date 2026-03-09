@@ -152,13 +152,13 @@ fn get_server_url(engine: tauri::State<'_, inference::SharedEngine>) -> Option<S
 pub fn run() {
 	let engine = inference::create_engine();
 
-	tauri::Builder::default()
+	let app = tauri::Builder::default()
 		.plugin(tauri_plugin_opener::init())
 		.setup(|app| {
 			ensure_dirs(app.handle());
 			Ok(())
 		})
-		.manage(engine)
+		.manage(engine.clone())
 		.invoke_handler(tauri::generate_handler![
 			// Model management
 			list_models,
@@ -172,6 +172,15 @@ pub fn run() {
 			// System
 			get_system_info,
 		])
-		.run(tauri::generate_context!())
-		.expect("error while running tauri application");
+		.build(tauri::generate_context!())
+		.expect("error while building tauri application");
+
+	app.run(move |_app_handle, event| match event {
+		tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+			if let Ok(mut eng) = engine.lock() {
+				eng.stop();
+			}
+		}
+		_ => {}
+	});
 }

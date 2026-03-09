@@ -1,6 +1,6 @@
 /// Manages the llama-server subprocess lifecycle.
 use std::path::PathBuf;
-use std::net::TcpListener;
+use std::net::{TcpListener, SocketAddr};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -46,7 +46,7 @@ impl InferenceEngine {
 		self.model_path = None;
 	}
 
-	pub fn start(&mut self, path: &str, ctx_size: Option<u32>, gpu_index: Option<i32>) -> Result<u16, String> {
+	pub fn start(&mut self, path: &str, ctx_size: Option<u32>, gpu_index: Option<i32>, log_dir: Option<PathBuf>) -> Result<u16, String> {
 		// Don't restart if same model already loaded and server alive
 		if self.model_path.as_deref() == Some(path) && self.server_is_alive() {
 			return Ok(self.port.unwrap());
@@ -82,19 +82,28 @@ impl InferenceEngine {
 				let index_str = index.to_string();
 				// For Vulkan (primary backend on Windows for Loki)
 				cmd.env("GGML_VK_VISIBLE_DEVICES", &index_str);
+				cmd.env("GGML_VULKAN_DEVICE", &index_str);
 			}
 		}
 		
-		// Pipe output in debug mode so we can see what's happening
-		#[cfg(debug_assertions)]
-		{
-			cmd.stdout(Stdio::inherit());
-			cmd.stderr(Stdio::inherit());
-		}
-		#[cfg(not(debug_assertions))]
-		{
-			cmd.stdout(Stdio::null());
-			cmd.stderr(Stdio::null());
+		// Pipe output to a log file if log_dir is provided
+		if let Some(dir) = log_dir {
+			let log_path = dir.join("llama_server.log");
+			if let Ok(file) = std::fs::File::create(log_path) {
+				cmd.stdout(Stdio::from(file.try_clone().unwrap()));
+				cmd.stderr(Stdio::from(file));
+			}
+		} else {
+			#[cfg(debug_assertions)]
+			{
+				cmd.stdout(Stdio::inherit());
+				cmd.stderr(Stdio::inherit());
+			}
+			#[cfg(not(debug_assertions))]
+			{
+				cmd.stdout(Stdio::null());
+				cmd.stderr(Stdio::null());
+			}
 		}
 
 		eprintln!("Starting llama-server: {} --model {} --port {}", binary.display(), path, port);
@@ -113,7 +122,7 @@ impl InferenceEngine {
 		self.port = Some(port);
 		self.model_path = Some(path.to_string());
 
-		wait_for_server(port, Duration::from_secs(120))?;
+		wait_for_server(port, Duration::from_secs(300), log_dir)?;
 
 		Ok(port)
 	}
@@ -143,13 +152,14 @@ fn free_port() -> Result<u16, String> {
 		.map_err(|e| format!("Kunde inte hitta ledig port: {}", e))
 }
 
-fn wait_for_server(port: u16, timeout: Duration) -> Result<(), String> {
+fn wait_for_server(port: u16, timeout: Duration, log_dir: Option<PathBuf>) -> Result<(), String> {
 	let addr: std::net::SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
 	let deadline = Instant::now() + timeout;
 
 	loop {
 		if Instant::now() > deadline {
-			return Err(format!("llama-server startade inte inom {}s", timeout.as_secs()));
+			let log_msg = log_dir.map(|d| format!(" Se logg: {}", d.join("llama_server.log").display())).unwrap_or_default();
+			return Err(format!("llama-server startade inte inom {}s.{}", timeout.as_secs(), log_msg));
 		}
 		if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok() {
 			break;
@@ -165,7 +175,8 @@ fn wait_for_server(port: u16, timeout: Duration) -> Result<(), String> {
 
 	loop {
 		if Instant::now() > deadline {
-			return Err("llama-server /health svarade inte i tid".to_string());
+			let log_msg = log_dir.map(|d| format!(" Se logg: {}", d.join("llama_server.log").display())).unwrap_or_default();
+			return Err(format!("llama-server /health svarade inte i tid.{}", log_msg));
 		}
 		if let Ok(r) = client.get(&url).send() {
 			if r.status().is_success() {

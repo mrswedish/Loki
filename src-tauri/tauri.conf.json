@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Loki",
-  "version": "0.1.45",
-  "identifier": "com.loke.app",
+  "version": "0.1.46",
+  "identifier": "com.loki.app",
   "build": {
     "beforeDevCommand": "npm --prefix webui run dev",
     "devUrl": "http://localhost:5173",

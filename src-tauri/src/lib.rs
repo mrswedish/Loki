@@ -14,7 +14,11 @@ pub fn get_app_dir(app: &tauri::AppHandle) -> PathBuf {
 
 pub fn ensure_dirs(app: &tauri::AppHandle) {
 	let app_dir = get_app_dir(app);
-	for dir in [app_dir.clone(), app_dir.join("models"), app_dir.join("bin")] {
+	let mut dirs = vec![app_dir.clone(), app_dir.join("models"), app_dir.join("bin")];
+	if let Ok(log_dir) = app.path().app_log_dir() {
+		dirs.push(log_dir);
+	}
+	for dir in dirs {
 		if !dir.exists() {
 			fs::create_dir_all(dir).ok();
 		}
@@ -123,10 +127,11 @@ async fn start_server(
 	let bin_path = llama_server::ensure_server_binary(&app).await?;
 
 	let engine_clone = engine.inner().clone();
+	let log_dir = app.path().app_log_dir().ok();
 	tokio::task::spawn_blocking(move || {
 		let mut eng = engine_clone.lock().map_err(|e| format!("Lock-fel: {}", e))?;
 		eng.set_server_binary(bin_path);
-		let port = eng.start(&model_path, context_size, gpu_index)?;
+		let port = eng.start(&model_path, context_size, gpu_index, log_dir)?;
 		Ok(format!("http://127.0.0.1:{}", port))
 	})
 	.await

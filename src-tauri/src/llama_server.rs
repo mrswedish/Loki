@@ -92,7 +92,9 @@ async fn find_release_asset_url() -> Result<String, String> {
         .find(|a| {
             a["name"]
                 .as_str()
-                .map(|n: &str| n.contains(platform_key) && n.ends_with(ASSET_EXTENSION))
+                .map(|n: &str| {
+                    n.starts_with("llama-") && n.contains(platform_key) && n.ends_with(ASSET_EXTENSION)
+                })
                 .unwrap_or(false)
         })
         .ok_or_else(|| format!("Hittade ingen tillgång ({}) för platform '{}'", ASSET_EXTENSION, platform_key))?;

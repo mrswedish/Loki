@@ -291,8 +291,8 @@
 			</div>
 
 			{#if field.key === 'contextSize'}
-				{@const estimatedRamGb = (currentValue * 2 * 2 * 32) / (1024 * 1024 * 1024)}
-				<!-- rough estimate for FP16 KV cache: 2 bytes * 2 (K+V) * n_layer (approx 32) -->
+				{@const estimatedRamGb = (currentValue * 102400) / (1024 * 1024 * 1024)}
+				<!-- conservative estimate: approx 100KB per token for KV cache + overhead in 7B-8B models -->
 				{@const isHighRam = systemInfo && estimatedRamGb > systemInfo.available_ram_gb * 0.5}
 				{@const needsRestart = serverStore.contextSize !== null && serverStore.contextSize !== currentValue}
 

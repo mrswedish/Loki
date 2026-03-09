@@ -34,12 +34,12 @@ export interface ApiContextSizeError {
 
 export interface ApiErrorResponse {
 	error:
-		| ApiContextSizeError
-		| {
-				code: number;
-				message: string;
-				type?: string;
-		  };
+	| ApiContextSizeError
+	| {
+		code: number;
+		message: string;
+		type?: string;
+	};
 }
 
 export interface ApiChatMessageData {
@@ -351,7 +351,7 @@ export interface ApiSlotData {
 }
 
 export interface ApiProcessingState {
-	status: 'initializing' | 'generating' | 'preparing' | 'idle';
+	status: 'initializing' | 'generating' | 'preparing' | 'idle' | 'chunking';
 	tokensDecoded: number;
 	tokensRemaining: number;
 	contextUsed: number;
@@ -369,6 +369,11 @@ export interface ApiProcessingState {
 	promptTokens?: number;
 	promptMs?: number;
 	cacheTokens?: number;
+	chunking?: {
+		current: number;
+		total: number;
+		phase: 'mapping' | 'reducing';
+	};
 }
 
 /**

@@ -484,6 +484,7 @@ class ChatStore {
 		this.showErrorDialog(null);
 		this.setChatLoading(currentConv.id, true);
 		this.clearChatStreaming(currentConv.id);
+
 		try {
 			let parentIdForUserMessage: string | undefined;
 			if (isNewConversation) {
@@ -500,6 +501,31 @@ class ChatStore {
 					parentIdForUserMessage = systemMessage.id;
 				} else parentIdForUserMessage = rootId;
 			}
+
+			// Check for context window overflow
+			const currentNctx = selectedModelContextSize() || 4096;
+			const totalText =
+				content +
+				(allExtras?.map((e) => ('content' in e ? e.content : '')).join('\n') || '');
+
+			// Precise tokenization for chunking decision
+			const tokens = await ChatService.tokenize(totalText);
+			const safetyMargin = 1000; // Leave room for instructions/generation
+
+			if (tokens.length > currentNctx - safetyMargin && totalText.length > 1000) {
+				console.info(
+					`[chatStore] Context overflow detected (${tokens.length} tokens). Triggering Map-Reduce.`
+				);
+				await this.handleMappedMessage(
+					currentConv.id,
+					content,
+					allExtras,
+					parentIdForUserMessage,
+					currentNctx
+				);
+				return;
+			}
+
 			const userMessage = await this.addMessage(
 				MessageRole.USER,
 				content,
@@ -535,6 +561,111 @@ class ChatStore {
 				contextInfo
 			});
 		}
+	}
+
+	/**
+	 * Handles Map-Reduce flow for large data
+	 */
+	private async handleMappedMessage(
+		convId: string,
+		instruction: string,
+		extras: DatabaseMessageExtra[] | undefined,
+		parentId: string | undefined,
+		nCtx: number
+	): Promise<void> {
+		const totalText =
+			extras?.map((e) => ('content' in e ? e.content : '')).join('\n\n') || '';
+
+		// Conservative chunking: roughly half the context window
+		const chunkSizeChars = Math.floor(nCtx * 1.5); // Very rough conversion to chars
+		const overlap = Math.floor(chunkSizeChars * 0.1);
+		const chunks = ChatService.splitIntoChunks(totalText, chunkSizeChars, overlap);
+
+		const summaries: string[] = [];
+
+		// Create the assistant message that will show progress
+		const userMessage = await this.addMessage(
+			MessageRole.USER,
+			`[Map-Reduce] Bearbetar stor textmassa (${chunks.length} delar)...`,
+			MessageType.TEXT,
+			parentId ?? '-1'
+		);
+		const assistantMessage = await this.createAssistantMessage(userMessage.id);
+		conversationsStore.addMessageToActive(assistantMessage);
+
+		for (let i = 0; i < chunks.length; i++) {
+			this.setProcessingState(convId, {
+				status: 'chunking',
+				chunking: { current: i + 1, total: chunks.length, phase: 'mapping' },
+				tokensDecoded: 0,
+				tokensRemaining: 0,
+				contextUsed: 0,
+				contextTotal: nCtx,
+				outputTokensUsed: 0,
+				outputTokensMax: -1,
+				temperature: 0,
+				topP: 1,
+				speculative: false,
+				hasNextToken: false
+			});
+
+			this.setChatStreaming(
+				convId,
+				`Sammanfattar del ${i + 1} av ${chunks.length}...`,
+				assistantMessage.id
+			);
+
+			const mapPrompt = `Du är en hjälpsam assistent. Sammanfatta följande del av ett dokument kortfattat men behåll alla viktiga namn, datum och tekniska detaljer. Text:\n\n${chunks[i]}`;
+
+			const summary = await ChatService.sendMessage(
+				[{ role: MessageRole.USER, content: mapPrompt }],
+				{ stream: false, temperature: 0.1 }
+			);
+
+			if (summary) summaries.push(summary as string);
+		}
+
+		this.setProcessingState(convId, {
+			status: 'chunking',
+			chunking: { current: 1, total: 1, phase: 'reducing' },
+			tokensDecoded: 0,
+			tokensRemaining: 0,
+			contextUsed: 0,
+			contextTotal: nCtx,
+			outputTokensUsed: 0,
+			outputTokensMax: -1,
+			temperature: 0.7,
+			topP: 1,
+			speculative: false,
+			hasNextToken: false
+		});
+
+		this.setChatStreaming(convId, `Skapar slutgiltigt svar...`, assistantMessage.id);
+
+		const finalPrompt = `Här är sammanfattningar av ett längre dokument indelat i ${chunks.length} delar. Baserat på dessa sammanfattningar, besvara användarens instruktion.\n\nAnvändarens instruktion: ${instruction}\n\nSammanfattningar:\n${summaries.join('\n\n---\n\n')}`;
+
+		// Now perform the final generation as a stream so the user sees it
+		await this.streamChatCompletion(
+			[
+				{
+					id: 'temp-id',
+					convId: assistantMessage.convId,
+					role: MessageRole.USER,
+					content: finalPrompt,
+					timestamp: Date.now(),
+					type: MessageType.TEXT,
+					children: [],
+					parent: null,
+					toolCalls: ''
+				} as DatabaseMessage
+			],
+			assistantMessage
+		);
+
+		// Clean up the temporary user message content
+		const idx = conversationsStore.findMessageIndex(userMessage.id);
+		conversationsStore.updateMessageAtIndex(idx, { content: instruction });
+		DatabaseService.updateMessage(userMessage.id, { content: instruction }).catch(console.error);
 	}
 
 	private async streamChatCompletion(

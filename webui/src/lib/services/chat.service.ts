@@ -16,6 +16,7 @@ import {
 import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/types/api';
 import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
 import { modelsStore } from '$lib/stores/models.svelte';
+import { serverStore } from '$lib/stores/server.svelte';
 
 export class ChatService {
 	private static stripReasoningContent(
@@ -48,6 +49,49 @@ export class ChatService {
 					.replace(AGENTIC_REGEX.AGENTIC_TOOL_CALL_OPEN, '')
 			};
 		});
+	}
+
+	/**
+	 * Tokenizes a string using the llama.cpp server's /tokenize endpoint.
+	 * Returns an array of token IDs.
+	 */
+	static async tokenize(content: string, signal?: AbortSignal): Promise<number[]> {
+		try {
+			const serverBase = getServerBase();
+			if (!serverBase) return new Array(Math.ceil(content.length / 3));
+
+			const response = await fetch(`${serverBase}/tokenize`, {
+				method: 'POST',
+				headers: getJsonHeaders(),
+				body: JSON.stringify({ content }),
+				signal
+			});
+
+			if (!response.ok) return new Array(Math.ceil(content.length / 3));
+			const data = await response.json();
+			return data.tokens || [];
+		} catch (error) {
+			console.error('[ChatService] Tokenization failed:', error);
+			// Fallback: rough estimate if server is busy/down
+			return new Array(Math.ceil(content.length / 3));
+		}
+	}
+
+	/**
+	 * Splits text into chunks with a specified size and overlap.
+	 */
+	static splitIntoChunks(text: string, chunkSize: number, overlap: number): string[] {
+		const chunks: string[] = [];
+		if (!text) return chunks;
+
+		let start = 0;
+		while (start < text.length) {
+			const end = Math.min(start + chunkSize, text.length);
+			chunks.push(text.slice(start, end));
+			if (end === text.length) break;
+			start += chunkSize - overlap;
+		}
+		return chunks;
 	}
 
 	/**

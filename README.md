@@ -48,6 +48,10 @@ Loki är det perfekta verktyget för att bolla känsliga ämnen, effektivisera i
   | **Qwen 3.5 4B** | ~2.6 GB | 6 GB+ | Analytisk Resonemang |
   | **Qwen 3.5 9B** | ~5.3 GB | 10 GB+ | Tungviktare |
   | **Qwen 2.5 Coder 7B**| ~4.4 GB | 8 GB+ | Kod & Logik |
+
+> [!TIP]
+> **Upplever du att en modell inte startar?** Om du har ett grafikkort med begränsat VRAM (t.ex. 6 GB), prova att sänka **Context Size** i inställningarna till 4096 eller 2048. Detta minskar minneskravet avsevärt vid start.
+
 * **Magisk Chunking (Map-Reduce)** – Appen känner automatiskt av om en text är för stor för kontextfönstret och delar upp den i bitar för att kunna sammanfatta timmar av material utan informationsförlust.
 * **Hårdvaruacceleration med kontroll** – Drar nytta av Vulkan (Windows) eller Metal (macOS). Nyhet i v0.1.43: Möjlighet att manuellt välja GPU-index för att tvinga fram rätt grafikkort på t.ex. bärbara datorer.
 * **Dynamiskt kontextstöd** – Justera storleken på AI-minnet (tokens) med en enkel slider för att optimera prestanda vs. RAM.

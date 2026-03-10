@@ -86,9 +86,9 @@ pub fn model_registry() -> Vec<ModelEntry> {
             filename: "Ministral-3-3B-Instruct-2512-Q5_K_M.gguf".to_string(),
             url: "https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF/resolve/main/Ministral-3-3B-Instruct-2512-Q5_K_M.gguf".to_string(),
             size_bytes: 2_474_178_720,
-            description: "Ministral 3B Instruct 2512 – kompakt, modern och effektiv expert, Q5 (~2.3 GB)".to_string(),
+            description: "Ministral 3B Instruct 2512 – kompakt expert. Tips: Sänk kontextfönstret i inställningar vid lite VRAM. Q5 (~2.3 GB)".to_string(),
             flavor: "Kompakt".to_string(),
-            ram_required_gb: 4.0,
+            ram_required_gb: 5.0,
             is_default: false,
         },
         ModelEntry {
@@ -97,9 +97,9 @@ pub fn model_registry() -> Vec<ModelEntry> {
             filename: "Ministral-3-8B-Instruct-2512-Q5_K_M.gguf".to_string(),
             url: "https://huggingface.co/mistralai/Ministral-3-8B-Instruct-2512-GGUF/resolve/main/Ministral-3-8B-Instruct-2512-Q5_K_M.gguf".to_string(),
             size_bytes: 6_059_268_512,
-            description: "Ministral 8B Instruct 2512 – efterföljaren till Mistral 7B, toppmodern prestanda, Q5 (~5.6 GB)".to_string(),
+            description: "Ministral 8B Instruct 2512 – efterföljaren till Mistral 7B. Kräver sänkt kontext vid < 8GB VRAM. Q5 (~5.6 GB)".to_string(),
             flavor: "Balanserad".to_string(),
-            ram_required_gb: 8.0,
+            ram_required_gb: 10.0,
             is_default: false,
         },
         ModelEntry {

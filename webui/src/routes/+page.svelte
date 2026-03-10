@@ -4,7 +4,7 @@
 	import { conversationsStore, isConversationsInitialized } from '$lib/stores/conversations.svelte';
 	import { modelsStore, modelOptions } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
 
@@ -64,6 +64,13 @@
 		}
 	}
 
+	$effect(() => {
+		// Handle URL params reactively whenever they change
+		if (qParam !== null || modelParam !== null || newChatParam === 'true') {
+			untrack(() => handleUrlParams());
+		}
+	});
+
 	onMount(async () => {
 		if (!isConversationsInitialized()) {
 			await conversationsStore.initialize();
@@ -78,11 +85,6 @@
 			!modelsStore.isModelLoaded(modelsStore.selectedModelName)
 		) {
 			modelsStore.clearSelection();
-		}
-
-		// Handle URL params only if we have ?q= or ?model= or ?new_chat=true
-		if (qParam !== null || modelParam !== null || newChatParam === 'true') {
-			await handleUrlParams();
 		}
 	});
 </script>

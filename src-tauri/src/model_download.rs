@@ -48,17 +48,6 @@ pub fn model_registry() -> Vec<ModelEntry> {
             is_default: true,
         },
         ModelEntry {
-            id: "qwen-3.5-0.8b-instruct".to_string(),
-            name: "Qwen 3.5 0.8B".to_string(),
-            filename: "Qwen3.5-0.8B-Q4_K_M.gguf".to_string(),
-            url: "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf?download=true".to_string(),
-            size_bytes: 550_000_000,
-            description: "Qwen 3.5 0.8B Instruct – extremt lättdriven, blixtsnabb. Tips: Inaktivera resonemangs-parsing i inställningar för bäst resultat. Q4 (~0.5 GB)".to_string(),
-            flavor: "Snabb".to_string(),
-            ram_required_gb: 1.5,
-            is_default: false,
-        },
-        ModelEntry {
             id: "qwen-3.5-2b-instruct".to_string(),
             name: "Qwen 3.5 2B".to_string(),
             filename: "Qwen3.5-2B-Q4_K_M.gguf".to_string(),

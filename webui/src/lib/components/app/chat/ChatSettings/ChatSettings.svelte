@@ -115,6 +115,11 @@
 					type: SettingsFieldType.CHECKBOX
 				},
 				{
+					key: SETTINGS_KEYS.DISABLE_REASONING_PARSING,
+					label: 'Inaktivera resonemangs-parsing',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
 					key: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
 					label: 'Visa mikrofon vid tomt inmatningsfält',
 					type: SettingsFieldType.CHECKBOX,

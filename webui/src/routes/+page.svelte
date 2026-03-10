@@ -60,6 +60,8 @@
 			await chatStore.sendMessage(qParam);
 			clearUrlParams();
 		} else if (modelParam || newChatParam === 'true') {
+			conversationsStore.clearActiveConversation();
+			chatStore.clearUIState();
 			clearUrlParams();
 		}
 	}

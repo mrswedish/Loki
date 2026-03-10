@@ -3,6 +3,9 @@
 	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { chatStore } from '$lib/stores/chat.svelte';
+	import { goto } from '$app/navigation';
 
 	interface Props {
 		handleMobileSidebarItemClick: () => void;
@@ -53,8 +56,12 @@
 	{:else}
 		<Button
 			class="w-full justify-between hover:[&>kbd]:opacity-100"
-			href="?new_chat=true#/"
-			onclick={handleMobileSidebarItemClick}
+			onclick={async () => {
+				handleMobileSidebarItemClick();
+				conversationsStore.clearActiveConversation();
+				chatStore.clearUIState();
+				await goto('#/');
+			}}
 			variant="ghost"
 		>
 			<div class="flex items-center gap-2">

@@ -37,7 +37,7 @@ Loki är det perfekta verktyget för att bolla känsliga ämnen, effektivisera i
 ## Nyckelfunktioner
 
 * **100 % lokal AI** – All tankekraft genereras av din egen hårdvara, helt oberoende av molnet.
-* **Färdiga "smaker"** – Sex förvalda, optimerade modeller som laddas ner direkt i appen med ett klick. Nu med den toppmoderna **Qwen 3.5-serien** och **Qwen 2.5 Coder** – små men extremt smarta experter på allt från sammanfattning till avancerad logik och kod.
+* **Färdiga "smaker"** – Sju förvalda, optimerade modeller som laddas ner direkt i appen med ett klick. Nu med den toppmoderna **Qwen 3.5-serien** (från den blixtsnabba 0.8B till den analytiska 4B) och **Qwen 2.5 Coder** – små men extremt smarta experter på allt från sammanfattning till avancerad logik och kod.
 * **Magisk Chunking (Map-Reduce)** – Appen känner automatiskt av om en text är för stor för kontextfönstret och delar upp den i bitar för att kunna sammanfatta timmar av material utan informationsförlust.
 * **Hårdvaruacceleration med kontroll** – Drar nytta av Vulkan (Windows) eller Metal (macOS). Nyhet i v0.1.43: Möjlighet att manuellt välja GPU-index för att tvinga fram rätt grafikkort på t.ex. bärbara datorer.
 * **Dynamiskt kontextstöd** – Justera storleken på AI-minnet (tokens) med en enkel slider för att optimera prestanda vs. RAM.
@@ -52,3 +52,19 @@ Loki är det perfekta verktyget för att bolla känsliga ämnen, effektivisera i
 * **Portabelt läge** – Kan köras direkt från mappen utan installation (kräver WebView2 på Windows).
 
 ---
+
+## Installation & Felsökning
+
+### macOS: "Appen är skadad och kan inte öppnas"
+Eftersom Loki inte är digitalt signerad via Apples betalda utvecklingsprogram kan macOS visa ett felmeddelande om att appen är skadad när den laddas ner via en webbläsare. Detta är en säkerhetsfunktion i Gatekeeper.
+
+För att fixa detta, öppna **Terminalen** och kör följande kommando:
+
+```bash
+sudo xattr -rd com.apple.quarantine /Applications/Loki.app
+```
+
+*(Om du har flyttat appen till en annan mapp än Applications, justera sökvägen i kommandot).*
+
+### Windows: "SmartScreen förhindrade att en okänd app startades"
+Klicka på **"Mer information"** och sedan **"Kör ändå"**. Appen kräver även [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) (finns oftast redan installerat i Windows 10/11).

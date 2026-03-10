@@ -12,13 +12,14 @@ const config = {
 		paths: {
 			relative: true
 		},
-		router: { type: 'hash' },
+		// router: { type: 'hash' },
 		adapter: adapter({
 			pages: '../dist',
 			assets: '../dist',
 			fallback: 'index.html',
 			precompress: false,
-			strict: true
+			strict: true,
+			handleUnseenRoutes: 'ignore'
 		}),
 		output: {
 			bundleStrategy: 'inline'

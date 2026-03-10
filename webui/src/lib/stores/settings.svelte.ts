@@ -39,12 +39,8 @@ import {
 } from '$lib/constants';
 import { ParameterSyncService } from '$lib/services/parameter-sync.service';
 import { serverStore } from '$lib/stores/server.svelte';
-import {
-	configToParameterRecord,
-	normalizeFloatingPoint,
-	getConfigValue,
-	setConfigValue
-} from '$lib/utils';
+import { configToParameterRecord, getConfigValue, setConfigValue } from '$lib/utils/config-helpers';
+import { normalizeFloatingPoint } from '$lib/utils/precision';
 
 class SettingsStore {
 	/**

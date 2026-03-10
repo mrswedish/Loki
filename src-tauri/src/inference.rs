@@ -46,7 +46,7 @@ impl InferenceEngine {
 		self.model_path = None;
 	}
 
-	pub fn start(&mut self, path: &str, ctx_size: Option<u32>, gpu_index: Option<i32>, log_dir: Option<PathBuf>) -> Result<u16, String> {
+	pub fn start(&mut self, path: &str, ctx_size: Option<u32>, _gpu_index: Option<i32>, log_dir: Option<PathBuf>) -> Result<u16, String> {
 		// Don't restart if same model already loaded and server alive
 		if self.model_path.as_deref() == Some(path) && self.server_is_alive() {
 			return Ok(self.port.unwrap());

@@ -1,4 +1,6 @@
-import { getJsonHeaders, formatAttachmentText, isAbortError } from '$lib/utils';
+import { getJsonHeaders } from '$lib/utils/api-headers';
+import { formatAttachmentText } from '$lib/utils/formatters';
+import { isAbortError } from '$lib/utils/abort';
 import { getServerBase } from '$lib/server-url';
 import {
 	AGENTIC_REGEX,

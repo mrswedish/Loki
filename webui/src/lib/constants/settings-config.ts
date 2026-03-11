@@ -52,7 +52,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	dry_penalty_last_n: -1,
 	max_tokens: -1,
 	custom: '', // custom json-stringified object
-	contextSize: 8192,
+	contextSize: 4096,
 	// experimental features
 	enableContinueGeneration: false,
 	gpuIndex: -1
@@ -62,7 +62,7 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	apiKey: 'Set the API Key if you are using <code>--api-key</code> option for the server.',
 	systemMessage: 'The starting message that defines how model should behave.',
 	contextSize:
-		'The size of the context window (tokens). Larger context allows for longer conversations but uses more RAM. 8192 tokens correspond to approximately 30 minutes of transcribed text.',
+		'The size of the context window (tokens). Larger context allows for longer conversations but uses more RAM. 4096 tokens correspond to approximately 15 minutes of transcribed text.',
 	showSystemMessage: 'Display the system message at the top of each conversation.',
 	theme:
 		'Choose the color theme for the interface. You can choose between System (follows your device settings), Light, or Dark.',

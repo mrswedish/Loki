@@ -286,7 +286,7 @@
 		settingSections.find((section) => section.title === activeSection) || settingSections[0]
 	);
 	let needsRestart = $derived(
-		localConfig.contextSize !== (serverStore.contextSize ?? 2048) ||
+		localConfig.contextSize !== (serverStore.contextSize ?? 4096) ||
 		localConfig.gpuIndex !== (serverStore.activeGpuIndex ?? -1)
 	);
 

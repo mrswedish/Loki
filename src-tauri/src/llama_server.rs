@@ -18,10 +18,39 @@ pub fn server_binary_path(app: &AppHandle) -> PathBuf {
     crate::get_app_dir(app).join("bin").join(key).join(BINARY_NAME)
 }
 
+/// Returns the path to the version file stored alongside the binary.
+fn version_file_path(app: &AppHandle) -> PathBuf {
+    let key = platform_key();
+    crate::get_app_dir(app).join("bin").join(key).join("version.txt")
+}
+
+/// Returns the installed llama-server release tag, if known.
+pub fn get_installed_version(app: &AppHandle) -> Option<String> {
+    std::fs::read_to_string(version_file_path(app))
+        .ok()
+        .map(|s| s.trim().to_string())
+}
+
+/// Removes the binary and its version file so the next call to
+/// `ensure_server_binary` will re-download the latest release.
+pub fn clear_server_binary(app: &AppHandle) -> Result<(), String> {
+    let bin_path = server_binary_path(app);
+    let ver_path = version_file_path(app);
+    if bin_path.exists() {
+        std::fs::remove_file(&bin_path)
+            .map_err(|e| format!("Kunde inte ta bort binär: {}", e))?;
+    }
+    if ver_path.exists() {
+        let _ = std::fs::remove_file(&ver_path);
+    }
+    Ok(())
+}
+
 /// Ensure the llama-server binary exists; download + extract if not.
+/// A `version.txt` file next to the binary tracks which release is installed.
 pub async fn ensure_server_binary(app: &AppHandle) -> Result<PathBuf, String> {
     let bin_path = server_binary_path(app);
-    if bin_path.exists() {
+    if bin_path.exists() && version_file_path(app).exists() {
         return Ok(bin_path);
     }
 
@@ -29,9 +58,9 @@ pub async fn ensure_server_binary(app: &AppHandle) -> Result<PathBuf, String> {
     std::fs::create_dir_all(&bin_dir)
         .map_err(|e| format!("Kunde inte skapa bin-katalog: {}", e))?;
 
-    let url = find_release_asset_url().await?;
+    let (url, tag) = find_release_asset().await?;
     let bytes = download_asset(&url).await?;
-    
+
     if url.ends_with(".zip") {
         extract_zip(&bytes, &bin_dir)?;
     } else if url.ends_with(".tar.gz") {
@@ -42,7 +71,7 @@ pub async fn ensure_server_binary(app: &AppHandle) -> Result<PathBuf, String> {
 
     if !bin_path.exists() {
         return Err(format!(
-            "Binären '{}' hittades inte i ZIP:en",
+            "Binären '{}' hittades inte i arkivet",
             BINARY_NAME
         ));
     }
@@ -55,14 +84,20 @@ pub async fn ensure_server_binary(app: &AppHandle) -> Result<PathBuf, String> {
             .map_err(|e| format!("chmod fail: {}", e))?;
     }
 
+    // Persist installed version so we can show it in the UI and skip re-downloads
+    std::fs::write(version_file_path(app), &tag)
+        .map_err(|e| format!("Kunde inte spara version: {}", e))?;
+
     Ok(bin_path)
 }
 
 
-/// Fetch latest release JSON from GitHub, find the right asset URL.
-async fn find_release_asset_url() -> Result<String, String> {
+/// Fetch latest release JSON from GitHub, find the right asset URL and release tag.
+/// Returns `(download_url, tag_name)`.
+async fn find_release_asset() -> Result<(String, String), String> {
     let client = reqwest::Client::builder()
         .user_agent("loki-app")
+        .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| format!("HTTP client error: {}", e))?;
 
@@ -80,6 +115,11 @@ async fn find_release_asset_url() -> Result<String, String> {
         .json::<serde_json::Value>()
         .await
         .map_err(|e| format!("JSON parse-fel: {}", e))?;
+
+    let tag = json["tag_name"]
+        .as_str()
+        .unwrap_or("unknown")
+        .to_string();
 
     let assets = json["assets"]
         .as_array()
@@ -99,10 +139,12 @@ async fn find_release_asset_url() -> Result<String, String> {
         })
         .ok_or_else(|| format!("Hittade ingen tillgång ({}) för platform '{}'", ASSET_EXTENSION, platform_key))?;
 
-    asset["browser_download_url"]
+    let url = asset["browser_download_url"]
         .as_str()
         .map(|s: &str| s.to_string())
-        .ok_or("Ingen download URL i asset".to_string())
+        .ok_or("Ingen download URL i asset".to_string())?;
+
+    Ok((url, tag))
 }
 
 #[cfg(target_os = "windows")]
@@ -124,6 +166,7 @@ fn platform_key() -> &'static str {
 async fn download_asset(url: &str) -> Result<Vec<u8>, String> {
     let client = reqwest::Client::builder()
         .user_agent("loki-app")
+        .timeout(std::time::Duration::from_secs(300)) // 5-minute download timeout
         .build()
         .map_err(|e| format!("HTTP client error: {}", e))?;
 

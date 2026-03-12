@@ -564,7 +564,9 @@ class ChatStore {
 	}
 
 	/**
-	 * Handles Map-Reduce flow for large data
+	 * Handles Map-Reduce flow for large data.
+	 * Uses chain summarization (each chunk carries context from the previous summary)
+	 * and hierarchical reduce (groups summaries if they exceed the context window).
 	 */
 	private async handleMappedMessage(
 		convId: string,
@@ -593,6 +595,7 @@ class ChatStore {
 		const assistantMessage = await this.createAssistantMessage(userMessage.id);
 		conversationsStore.addMessageToActive(assistantMessage);
 
+		// Map phase – chain summarization: each chunk carries context from the previous summary
 		for (let i = 0; i < chunks.length; i++) {
 			this.setProcessingState(convId, {
 				status: 'chunking',
@@ -615,7 +618,13 @@ class ChatStore {
 				assistantMessage.id
 			);
 
-			const mapPrompt = `Sammanfatta följande del av ett dokument. Var objektiv och behåll alla viktiga namn, datum, tekniska detaljer och specifik fakta. Text:\n\n${chunks[i]}`;
+			// Include a snippet of the previous summary to maintain document flow
+			const prevSummary = summaries.length > 0 ? summaries[summaries.length - 1] : null;
+			const contextHint = prevSummary
+				? `\n\nKontext från föregående avsnitt: "${prevSummary.slice(0, 400)}"\n`
+				: '';
+
+			const mapPrompt = `Sammanfatta följande del av ett dokument.${contextHint}\nVar objektiv och behåll alla viktiga namn, datum, tekniska detaljer och specifik fakta.\n\nText:\n\n${chunks[i]}`;
 
 			const summary = await ChatService.sendMessage(
 				[{ role: MessageRole.USER, content: mapPrompt }],
@@ -624,6 +633,14 @@ class ChatStore {
 
 			if (summary) summaries.push(summary as string);
 		}
+
+		// Reduce phase – ensure all summaries fit the context window before final generation
+		const fittedSummaries = await this.ensureSummariesFitContext(
+			summaries,
+			nCtx,
+			convId,
+			assistantMessage
+		);
 
 		this.setProcessingState(convId, {
 			status: 'chunking',
@@ -644,16 +661,16 @@ class ChatStore {
 
 		const finalPrompt = `Du är Loki, en hjälpsam AI-assistent. Nedan följer information extraherad från ett längre dokument. Din uppgift är att besvara användarens fråga baserat på denna information.
 
-VIKTIGT: 
-1. Svara direkt till användaren. 
-2. Nämn INTE att du läser sammanfattningar eller att dokumentet var uppdelat. 
-3. Aggeras som om du har läst hela dokumentet själv.
-4. Om användaren ber om en sammanfattning, ge dem en sammanhängande och välstruktuerad sådan.
+VIKTIGT:
+1. Svara direkt till användaren.
+2. Nämn INTE att du läser sammanfattningar eller att dokumentet var uppdelat.
+3. Agera som om du har läst hela dokumentet själv.
+4. Om användaren ber om en sammanfattning, ge dem en sammanhängande och välstrukturerad sådan.
 
 Användarens fråga: "${instruction}"
 
 Information från dokumentet:
-${summaries.join('\n\n')}`;
+${fittedSummaries.join('\n\n')}`;
 
 		// Now perform the final generation as a stream so the user sees it
 		await this.streamChatCompletion(
@@ -677,6 +694,59 @@ ${summaries.join('\n\n')}`;
 		const idx = conversationsStore.findMessageIndex(userMessage.id);
 		conversationsStore.updateMessageAtIndex(idx, { content: instruction });
 		DatabaseService.updateMessage(userMessage.id, { content: instruction }).catch(console.error);
+	}
+
+	/**
+	 * Ensures combined summaries fit within the context window.
+	 * If too large, groups adjacent summaries and reduces each group (hierarchical reduce),
+	 * recursing until they fit. Max depth: 3.
+	 */
+	private async ensureSummariesFitContext(
+		summaries: string[],
+		nCtx: number,
+		convId: string,
+		assistantMessage: DatabaseMessage,
+		depth = 0
+	): Promise<string[]> {
+		const MAX_DEPTH = 3;
+		if (depth >= MAX_DEPTH || summaries.length <= 1) return summaries;
+
+		const combined = summaries.join('\n\n');
+		const tokens = await ChatService.tokenize(combined);
+		const safetyMargin = 1500; // Space for system prompt + instruction + output
+
+		if (tokens.length <= nCtx - safetyMargin) return summaries;
+
+		// Group adjacent summaries into pairs and reduce each group
+		const groupSize = Math.max(2, Math.ceil(summaries.length / Math.ceil(summaries.length / 2)));
+		const groups: string[][] = [];
+		for (let i = 0; i < summaries.length; i += groupSize) {
+			groups.push(summaries.slice(i, i + groupSize));
+		}
+
+		this.setChatStreaming(
+			convId,
+			`Optimerar sammanfattning (${summaries.length} → ${groups.length} avsnitt)...`,
+			assistantMessage.id
+		);
+
+		const reducedSummaries: string[] = [];
+		for (const group of groups) {
+			const prompt = `Sammanfatta dessa relaterade avsnitt till ett sammanhängande stycke. Behåll alla viktiga namn, datum och detaljer:\n\n${group.join('\n\n---\n\n')}`;
+			const result = await ChatService.sendMessage(
+				[{ role: MessageRole.USER, content: prompt }],
+				{ stream: false, temperature: 0.0 }
+			);
+			if (result) reducedSummaries.push(result as string);
+		}
+
+		return this.ensureSummariesFitContext(
+			reducedSummaries,
+			nCtx,
+			convId,
+			assistantMessage,
+			depth + 1
+		);
 	}
 
 	private async streamChatCompletion(

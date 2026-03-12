@@ -113,6 +113,20 @@ fn delete_model_cmd(model_id: String, app: tauri::AppHandle) -> Result<(), Strin
 	Ok(())
 }
 
+// ─── Binary Management ───────────────────────────────────
+
+/// Returns the installed llama-server release tag (e.g. "b5262"), or null if unknown.
+#[tauri::command]
+fn get_server_binary_version(app: tauri::AppHandle) -> Option<String> {
+	llama_server::get_installed_version(&app)
+}
+
+/// Removes the current llama-server binary so the next server start re-downloads the latest release.
+#[tauri::command]
+fn update_server_binary(app: tauri::AppHandle) -> Result<(), String> {
+	llama_server::clear_server_binary(&app)
+}
+
 // ─── Server Lifecycle ────────────────────────────────────
 
 /// Starta llama-server med vald modell. Returnerar "http://127.0.0.1:{port}".
@@ -152,6 +166,27 @@ fn get_server_url(engine: tauri::State<'_, inference::SharedEngine>) -> Option<S
 	engine.lock().ok().and_then(|eng| eng.server_url())
 }
 
+/// Returns true if the llama-server process is currently responding.
+#[tauri::command]
+fn check_server_health(engine: tauri::State<'_, inference::SharedEngine>) -> bool {
+	engine.lock().ok().map_or(false, |eng| eng.server_is_alive())
+}
+
+/// If the server is dead but a model was previously loaded, restarts it.
+/// Returns the new server URL on restart, or null if already alive / nothing to restart.
+#[tauri::command]
+async fn restart_server_if_dead(
+	engine: tauri::State<'_, inference::SharedEngine>,
+) -> Result<Option<String>, String> {
+	let engine_clone = engine.inner().clone();
+	tokio::task::spawn_blocking(move || {
+		let mut eng = engine_clone.lock().map_err(|e| format!("Lock-fel: {}", e))?;
+		eng.restart_if_dead()
+	})
+	.await
+	.map_err(|e| format!("Tokio join error: {}", e))?
+}
+
 // ─── Tauri App Entry ─────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -171,10 +206,15 @@ pub fn run() {
 			list_available_models,
 			download_model_cmd,
 			delete_model_cmd,
+			// Binary management
+			get_server_binary_version,
+			update_server_binary,
 			// Server lifecycle
 			start_server,
 			stop_server,
 			get_server_url,
+			check_server_health,
+			restart_server_if_dead,
 			// System
 			get_system_info,
 		])

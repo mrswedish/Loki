@@ -94,6 +94,33 @@ export async function getSystemInfo(): Promise<SystemInfo> {
 	return invoke<SystemInfo>('get_system_info');
 }
 
+/** Returnerar installerad llama-server release-tag, t.ex. "b5262". Null om okänd. */
+export async function getServerBinaryVersion(): Promise<string | null> {
+	if (!isTauriEnv()) return null;
+	return invoke<string | null>('get_server_binary_version');
+}
+
+/** Tar bort nuvarande llama-server-binär så att nästa serverstart laddar ner senaste release. */
+export async function updateServerBinary(): Promise<void> {
+	if (!isTauriEnv()) return;
+	await invoke<void>('update_server_binary');
+}
+
+/** Returnerar true om llama-server-processen svarar just nu. */
+export async function checkServerHealth(): Promise<boolean> {
+	if (!isTauriEnv()) return true;
+	return invoke<boolean>('check_server_health');
+}
+
+/**
+ * Startar om servern om den är nere (men en modell var laddad).
+ * Returnerar ny server-URL vid omstart, annars null.
+ */
+export async function restartServerIfDead(): Promise<string | null> {
+	if (!isTauriEnv()) return null;
+	return invoke<string | null>('restart_server_if_dead');
+}
+
 export interface DownloadProgress {
 	model_id: string;
 	percent: number;

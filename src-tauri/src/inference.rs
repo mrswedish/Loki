@@ -10,6 +10,10 @@ pub struct InferenceEngine {
 	server_process: Option<Child>,
 	pub port: Option<u16>,
 	model_path: Option<String>,
+	// Stored for auto-restart
+	ctx_size: Option<u32>,
+	gpu_index: Option<i32>,
+	log_dir: Option<PathBuf>,
 }
 
 // Safety: Child is owned and only accessed through Mutex
@@ -28,6 +32,9 @@ impl InferenceEngine {
 			server_process: None,
 			port: None,
 			model_path: None,
+			ctx_size: None,
+			gpu_index: None,
+			log_dir: None,
 		}
 	}
 
@@ -121,10 +128,29 @@ impl InferenceEngine {
 		self.server_process = Some(child);
 		self.port = Some(port);
 		self.model_path = Some(path.to_string());
+		self.ctx_size = ctx_size;
+		self.gpu_index = gpu_index;
+		self.log_dir = log_dir.clone();
 
 		wait_for_server(port, Duration::from_secs(300), log_dir)?;
 
 		Ok(port)
+	}
+
+	/// Restarts the server if it is no longer alive, using the last-known parameters.
+	/// Returns `Ok(Some(new_url))` if restarted, `Ok(None)` if still alive or nothing to restart.
+	pub fn restart_if_dead(&mut self) -> Result<Option<String>, String> {
+		if self.server_is_alive() {
+			return Ok(None);
+		}
+		let Some(model_path) = self.model_path.clone() else {
+			return Ok(None); // No model was loaded – nothing to restart
+		};
+		eprintln!("[InferenceEngine] Server dead, restarting with model: {}", model_path);
+		let log_dir = self.log_dir.clone();
+		let port = self.start(&model_path, self.ctx_size, self.gpu_index, log_dir)?;
+		eprintln!("[InferenceEngine] Server restarted on port {}", port);
+		Ok(Some(format!("http://127.0.0.1:{}", port)))
 	}
 
 	pub fn stop(&mut self) {
@@ -137,7 +163,7 @@ impl InferenceEngine {
 	}
 
 
-	fn server_is_alive(&self) -> bool {
+	pub fn server_is_alive(&self) -> bool {
 		let Some(port) = self.port else { return false; };
 		std::net::TcpStream::connect_timeout(
 			&format!("127.0.0.1:{}", port).parse().unwrap(),

@@ -17,8 +17,8 @@
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
-	import { getServerBase, isTauriEnv } from '$lib/server-url';
-	import { fetchServerUrl } from '$lib/tauri-bridge';
+	import { getServerBase, isTauriEnv, setServerBase } from '$lib/server-url';
+	import { fetchServerUrl, checkServerHealth, restartServerIfDead } from '$lib/tauri-bridge';
 	import TauriModelSelector from '$lib/components/app/TauriModelSelector.svelte';
 	import { KeyboardKey, ColorMode } from '$lib/enums';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
@@ -158,6 +158,30 @@
 				modelsStore.fetchRouterModels();
 			});
 		}
+	});
+
+	// Periodic llama-server health check with auto-restart (Tauri only)
+	$effect(() => {
+		if (!isTauriEnv() || !tauriServerReady) return;
+
+		const interval = setInterval(async () => {
+			try {
+				const alive = await checkServerHealth();
+				if (!alive) {
+					console.warn('[layout] llama-server inte svarar – försöker starta om...');
+					const newUrl = await restartServerIfDead();
+					if (newUrl) {
+						console.info('[layout] llama-server omstartad:', newUrl);
+						setServerBase(newUrl);
+						serverStore.fetch();
+					}
+				}
+			} catch (e) {
+				console.warn('[layout] Hälsokontroll misslyckades:', e);
+			}
+		}, 30_000);
+
+		return () => clearInterval(interval);
 	});
 
 	// Background MCP server health checks on app load

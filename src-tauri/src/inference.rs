@@ -73,7 +73,12 @@ impl InferenceEngine {
 
 		let ctx = ctx_size.unwrap_or(4096);
 
-		// Try GPU first (99 layers, 60s timeout), fall back to CPU (0 layers, 300s) on failure
+		// CPU-only build: skip GPU entirely
+		#[cfg(feature = "cpu-only")]
+		let port = self.try_spawn(&binary, path, ctx, gpu_index, log_dir.clone(), 0, Duration::from_secs(300))?;
+
+		// GPU build: try Vulkan first, fall back to CPU on failure (e.g. OOM)
+		#[cfg(not(feature = "cpu-only"))]
 		let port = self
 			.try_spawn(&binary, path, ctx, gpu_index, log_dir.clone(), 99, Duration::from_secs(60))
 			.or_else(|e| {

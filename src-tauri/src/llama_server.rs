@@ -147,9 +147,14 @@ async fn find_release_asset() -> Result<(String, String), String> {
     Ok((url, tag))
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", not(feature = "cpu-only")))]
 fn platform_key() -> &'static str {
     "bin-win-vulkan-x64"
+}
+
+#[cfg(all(target_os = "windows", feature = "cpu-only"))]
+fn platform_key() -> &'static str {
+    "bin-win-avx2-x64"
 }
 
 #[cfg(target_os = "macos")]

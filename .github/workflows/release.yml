@@ -10,7 +10,8 @@ permissions:
   contents: write
 
 jobs:
-  release-windows:
+  # ── GPU (Vulkan) build ────────────────────────────────────────────────────
+  release-windows-gpu:
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -34,7 +35,7 @@ jobs:
       - name: Install Dependencies
         run: npm install && npm --prefix webui install
 
-      - name: Build and Release Tauri App (Windows)
+      - name: Build and Release Tauri App (Windows GPU)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -51,7 +52,7 @@ jobs:
           $VERSION = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
           echo "APP_VERSION=$VERSION" >> $env:GITHUB_ENV
 
-      - name: Copy Portable Executable
+      - name: Copy GPU Portable Executable
         env:
           CARGO_TARGET_DIR: D:\t
         run: |
@@ -60,29 +61,26 @@ jobs:
             "$targetPath/release/loki.exe",
             "$targetPath/x86_64-pc-windows-msvc/release/loki.exe"
           )
-          
           $found = $false
           foreach ($p in $exePaths) {
             if (Test-Path $p) {
-              Copy-Item -Path $p -Destination "Loki-portable.exe"
+              Copy-Item -Path $p -Destination "Loki-portable-gpu.exe"
               $found = $true
               break
             }
           }
-          
           if (-not $found) {
-            Get-ChildItem -Path src-tauri/target -Filter "*.exe" -Recurse | Select-Object FullName
+            Get-ChildItem -Path $targetPath -Filter "*.exe" -Recurse | Select-Object FullName
             Write-Error "Could not find the executable."
           }
 
-      - name: Upload Portable Executable
+      - name: Upload GPU Portable Executable
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: |
-            Loki-portable.exe
+          files: Loki-portable-gpu.exe
 
-      - name: Copy Setup Executable
+      - name: Copy GPU Setup Executable
         env:
           CARGO_TARGET_DIR: D:\t
         run: |
@@ -91,27 +89,112 @@ jobs:
             "$targetPath/release/bundle/nsis",
             "$targetPath/x86_64-pc-windows-msvc/release/bundle/nsis"
           )
-          
           $found = $false
           foreach ($p in $setupPaths) {
             if (Test-Path $p) {
               $setupExe = Get-ChildItem -Path $p -Filter "*setup.exe" | Select-Object -First 1
               if ($setupExe) {
-                Copy-Item -Path $setupExe.FullName -Destination "Loki-setup.exe"
+                Copy-Item -Path $setupExe.FullName -Destination "Loki-setup-gpu.exe"
                 $found = $true
                 break
               }
             }
           }
-          
           if (-not $found) {
             Write-Warning "Could not find the NSIS setup executable."
           }
 
-      - name: Upload Setup Executable
+      - name: Upload GPU Setup Executable
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: |
-            Loki-setup.exe
+          files: Loki-setup-gpu.exe
 
+  # ── CPU (AVX2) build ──────────────────────────────────────────────────────
+  release-windows-cpu:
+    runs-on: windows-latest
+    needs: release-windows-gpu
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Enable Long Paths
+        run: |
+          git config --system core.longpaths true
+          Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -Force
+
+      - name: Install Dependencies
+        run: npm install && npm --prefix webui install
+
+      - name: Build Tauri App (Windows CPU)
+        env:
+          CARGO_TARGET_DIR: D:\t
+        run: npx tauri build -- --features cpu-only
+
+      - name: Copy CPU Portable Executable
+        env:
+          CARGO_TARGET_DIR: D:\t
+        run: |
+          $targetPath = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "src-tauri/target" }
+          $exePaths = @(
+            "$targetPath/release/loki.exe",
+            "$targetPath/x86_64-pc-windows-msvc/release/loki.exe"
+          )
+          $found = $false
+          foreach ($p in $exePaths) {
+            if (Test-Path $p) {
+              Copy-Item -Path $p -Destination "Loki-portable-cpu.exe"
+              $found = $true
+              break
+            }
+          }
+          if (-not $found) {
+            Get-ChildItem -Path $targetPath -Filter "*.exe" -Recurse | Select-Object FullName
+            Write-Error "Could not find the executable."
+          }
+
+      - name: Upload CPU Portable Executable
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: Loki-portable-cpu.exe
+
+      - name: Copy CPU Setup Executable
+        env:
+          CARGO_TARGET_DIR: D:\t
+        run: |
+          $targetPath = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "src-tauri/target" }
+          $setupPaths = @(
+            "$targetPath/release/bundle/nsis",
+            "$targetPath/x86_64-pc-windows-msvc/release/bundle/nsis"
+          )
+          $found = $false
+          foreach ($p in $setupPaths) {
+            if (Test-Path $p) {
+              $setupExe = Get-ChildItem -Path $p -Filter "*setup.exe" | Select-Object -First 1
+              if ($setupExe) {
+                Copy-Item -Path $setupExe.FullName -Destination "Loki-setup-cpu.exe"
+                $found = $true
+                break
+              }
+            }
+          }
+          if (-not $found) {
+            Write-Warning "Could not find the NSIS setup executable."
+          }
+
+      - name: Upload CPU Setup Executable
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: Loki-setup-cpu.exe

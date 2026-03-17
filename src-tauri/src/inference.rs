@@ -71,15 +71,45 @@ impl InferenceEngine {
 			return Err(format!("llama-server binary hittades inte: {}", binary.display()));
 		}
 
+		let ctx = ctx_size.unwrap_or(4096);
+
+		// Try GPU first (99 layers, 60s timeout), fall back to CPU (0 layers, 300s) on failure
+		let port = self
+			.try_spawn(&binary, path, ctx, gpu_index, log_dir.clone(), 99, Duration::from_secs(60))
+			.or_else(|e| {
+				eprintln!("[InferenceEngine] GPU misslyckades ({}), startar om med CPU (--n-gpu-layers 0)...", e);
+				self.try_spawn(&binary, path, ctx, gpu_index, log_dir.clone(), 0, Duration::from_secs(300))
+			})?;
+
+		self.port = Some(port);
+		self.model_path = Some(path.to_string());
+		self.ctx_size = ctx_size;
+		self.gpu_index = gpu_index;
+		self.log_dir = log_dir;
+
+		Ok(port)
+	}
+
+	/// Spawns llama-server with the given gpu_layers value and waits for it to become ready.
+	/// Kills the child and returns Err if the process dies or the timeout expires.
+	fn try_spawn(
+		&mut self,
+		binary: &PathBuf,
+		path: &str,
+		ctx: u32,
+		gpu_index: Option<i32>,
+		log_dir: Option<PathBuf>,
+		gpu_layers: u32,
+		timeout: Duration,
+	) -> Result<u16, String> {
 		let port = free_port()?;
 
-		let mut cmd = Command::new(&binary);
+		let mut cmd = Command::new(binary);
 		cmd.arg("--model").arg(path);
 		cmd.arg("--port").arg(port.to_string());
 		cmd.arg("--host").arg("127.0.0.1");
-		let ctx = ctx_size.unwrap_or(8192);
 		cmd.arg("--ctx-size").arg(ctx.to_string());
-		cmd.arg("--n-gpu-layers").arg("99");
+		cmd.arg("--n-gpu-layers").arg(gpu_layers.to_string());
 		cmd.arg("--jinja");
 
 		#[cfg(target_os = "windows")]
@@ -87,14 +117,12 @@ impl InferenceEngine {
 			let index = gpu_index.unwrap_or(-1);
 			if index >= 0 {
 				let index_str = index.to_string();
-				// For Vulkan (primary backend on Windows for Loki)
 				cmd.env("GGML_VK_VISIBLE_DEVICES", &index_str);
 				cmd.env("GGML_VULKAN_DEVICE", &index_str);
 			}
 		}
-		
-		// Pipe output to a log file if log_dir is provided
-		if let Some(dir) = &log_dir {
+
+		if let Some(ref dir) = log_dir {
 			let log_path = dir.join("llama_server.log");
 			if let Ok(file) = std::fs::File::create(log_path) {
 				cmd.stdout(Stdio::from(file.try_clone().unwrap()));
@@ -113,8 +141,6 @@ impl InferenceEngine {
 			}
 		}
 
-		eprintln!("Starting llama-server: {} --model {} --port {}", binary.display(), path, port);
-
 		#[cfg(target_os = "windows")]
 		{
 			use std::os::windows::process::CommandExt;
@@ -122,19 +148,26 @@ impl InferenceEngine {
 			cmd.creation_flags(CREATE_NO_WINDOW);
 		}
 
-		let child = cmd.spawn()
+		eprintln!(
+			"Starting llama-server: {} --model {} --port {} --n-gpu-layers {}",
+			binary.display(), path, port, gpu_layers
+		);
+
+		let mut child = cmd
+			.spawn()
 			.map_err(|e| format!("Kunde inte starta llama-server: {}", e))?;
 
-		self.server_process = Some(child);
-		self.port = Some(port);
-		self.model_path = Some(path.to_string());
-		self.ctx_size = ctx_size;
-		self.gpu_index = gpu_index;
-		self.log_dir = log_dir.clone();
-
-		wait_for_server(port, Duration::from_secs(300), log_dir)?;
-
-		Ok(port)
+		match wait_for_server(port, timeout, log_dir, &mut child) {
+			Ok(()) => {
+				self.server_process = Some(child);
+				Ok(port)
+			}
+			Err(e) => {
+				let _ = child.kill();
+				let _ = child.wait();
+				Err(e)
+			}
+		}
 	}
 
 	/// Restarts the server if it is no longer alive, using the last-known parameters.
@@ -162,7 +195,6 @@ impl InferenceEngine {
 		self.port.map(|p| format!("http://127.0.0.1:{}", p))
 	}
 
-
 	pub fn server_is_alive(&self) -> bool {
 		let Some(port) = self.port else { return false; };
 		std::net::TcpStream::connect_timeout(
@@ -178,14 +210,23 @@ fn free_port() -> Result<u16, String> {
 		.map_err(|e| format!("Kunde inte hitta ledig port: {}", e))
 }
 
-fn wait_for_server(port: u16, timeout: Duration, log_dir: Option<PathBuf>) -> Result<(), String> {
+/// Waits for llama-server to become ready on `port`.
+/// Returns immediately with Err if the child process dies before the server is up.
+fn wait_for_server(port: u16, timeout: Duration, log_dir: Option<PathBuf>, child: &mut Child) -> Result<(), String> {
 	let addr: std::net::SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
 	let deadline = Instant::now() + timeout;
 
+	// Phase 1: wait for TCP port to open
 	loop {
 		if Instant::now() > deadline {
-			let log_msg = log_dir.map(|d| format!(" Se logg: {}", d.join("llama_server.log").display())).unwrap_or_default();
+			let log_msg = log_dir.as_ref()
+				.map(|d| format!(" Se logg: {}", d.join("llama_server.log").display()))
+				.unwrap_or_default();
 			return Err(format!("llama-server startade inte inom {}s.{}", timeout.as_secs(), log_msg));
+		}
+		// Detect early exit (e.g. GPU OOM, missing DLLs)
+		if let Ok(Some(status)) = child.try_wait() {
+			return Err(format!("llama-server avslutades direkt (exit: {:?})", status));
 		}
 		if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok() {
 			break;
@@ -193,6 +234,7 @@ fn wait_for_server(port: u16, timeout: Duration, log_dir: Option<PathBuf>) -> Re
 		std::thread::sleep(Duration::from_millis(500));
 	}
 
+	// Phase 2: wait for /health to return 200
 	let url = format!("http://127.0.0.1:{}/health", port);
 	let client = reqwest::blocking::Client::builder()
 		.timeout(Duration::from_secs(2))
@@ -201,8 +243,13 @@ fn wait_for_server(port: u16, timeout: Duration, log_dir: Option<PathBuf>) -> Re
 
 	loop {
 		if Instant::now() > deadline {
-			let log_msg = log_dir.map(|d| format!(" Se logg: {}", d.join("llama_server.log").display())).unwrap_or_default();
+			let log_msg = log_dir.as_ref()
+				.map(|d| format!(" Se logg: {}", d.join("llama_server.log").display()))
+				.unwrap_or_default();
 			return Err(format!("llama-server /health svarade inte i tid.{}", log_msg));
+		}
+		if let Ok(Some(status)) = child.try_wait() {
+			return Err(format!("llama-server dog under hälsokontroll (exit: {:?})", status));
 		}
 		if let Ok(r) = client.get(&url).send() {
 			if r.status().is_success() {

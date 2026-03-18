@@ -12,16 +12,19 @@ const ASSET_EXTENSION: &str = ".zip";
 #[cfg(not(target_os = "windows"))]
 const ASSET_EXTENSION: &str = ".tar.gz";
 
+/// Returns the primary platform key used for directory naming.
+fn primary_platform_key() -> &'static str {
+    platform_keys()[0]
+}
+
 /// Returns the path where the llama-server binary should live.
 pub fn server_binary_path(app: &AppHandle) -> PathBuf {
-    let key = platform_key();
-    crate::get_app_dir(app).join("bin").join(key).join(BINARY_NAME)
+    crate::get_app_dir(app).join("bin").join(primary_platform_key()).join(BINARY_NAME)
 }
 
 /// Returns the path to the version file stored alongside the binary.
 fn version_file_path(app: &AppHandle) -> PathBuf {
-    let key = platform_key();
-    crate::get_app_dir(app).join("bin").join(key).join("version.txt")
+    crate::get_app_dir(app).join("bin").join(primary_platform_key()).join("version.txt")
 }
 
 /// Returns the installed llama-server release tag, if known.
@@ -93,7 +96,7 @@ pub async fn ensure_server_binary(app: &AppHandle) -> Result<PathBuf, String> {
 
 
 /// Fetch latest release JSON from GitHub, find the right asset URL and release tag.
-/// Returns `(download_url, tag_name)`.
+/// Tries each key in `platform_keys` in order and returns the first match.
 async fn find_release_asset() -> Result<(String, String), String> {
     let client = reqwest::Client::builder()
         .user_agent("loki-app")
@@ -125,43 +128,49 @@ async fn find_release_asset() -> Result<(String, String), String> {
         .as_array()
         .ok_or("Inga assets i GitHub-svaret")?;
 
-    // Find the matching asset by platform pattern prefix
-    let platform_key = platform_key();
-    let asset = assets
-        .iter()
-        .find(|a| {
+    // Try each candidate key in priority order
+    for key in platform_keys() {
+        if let Some(asset) = assets.iter().find(|a| {
             a["name"]
                 .as_str()
-                .map(|n: &str| {
-                    n.starts_with("llama-") && n.contains(platform_key) && n.ends_with(ASSET_EXTENSION)
-                })
+                .map(|n| n.starts_with("llama-") && n.contains(key) && n.ends_with(ASSET_EXTENSION))
                 .unwrap_or(false)
-        })
-        .ok_or_else(|| format!("Hittade ingen tillgång ({}) för platform '{}'", ASSET_EXTENSION, platform_key))?;
+        }) {
+            let url = asset["browser_download_url"]
+                .as_str()
+                .map(|s| s.to_string())
+                .ok_or("Ingen download URL i asset")?;
+            return Ok((url, tag));
+        }
+    }
 
-    let url = asset["browser_download_url"]
-        .as_str()
-        .map(|s: &str| s.to_string())
-        .ok_or("Ingen download URL i asset".to_string())?;
-
-    Ok((url, tag))
+    Err(format!(
+        "Hittade ingen tillgång ({}) för platform (testad: {})",
+        ASSET_EXTENSION,
+        platform_keys().join(", ")
+    ))
 }
 
-#[cfg(target_os = "windows")]
-fn platform_key() -> &'static str {
-    // Both GPU and CPU builds use the same Vulkan binary.
-    // The cpu-only feature controls --n-gpu-layers and Vulkan device env vars at runtime.
-    "bin-win-vulkan-x64"
-}
+/// Returns candidate platform keys in priority order.
+/// For CPU-only builds on Windows we try several CPU binary names since
+/// the exact naming varies between llama.cpp releases.
+fn platform_keys() -> Vec<&'static str> {
+    #[cfg(all(target_os = "windows", feature = "cpu-only"))]
+    return vec![
+        "bin-win-avx2-x64",
+        "bin-win-openblas-x64",
+        "bin-win-avx-x64",
+        "bin-win-noavx-x64",
+    ];
 
-#[cfg(target_os = "macos")]
-fn platform_key() -> &'static str {
-    "bin-macos-arm64"
-}
+    #[cfg(all(target_os = "windows", not(feature = "cpu-only")))]
+    return vec!["bin-win-vulkan-x64"];
 
-#[cfg(target_os = "linux")]
-fn platform_key() -> &'static str {
-    "bin-ubuntu-x64"
+    #[cfg(target_os = "macos")]
+    return vec!["bin-macos-arm64"];
+
+    #[cfg(target_os = "linux")]
+    return vec!["bin-ubuntu-x64"];
 }
 
 /// Download the asset (ZIP or TGZ) from `url` and return raw bytes.

@@ -710,6 +710,7 @@ export { default as ChatSettingsFields } from './ChatSettings/ChatSettingsFields
  * Handles file download/upload and data validation.
  */
 export { default as ChatSettingsImportExportTab } from './ChatSettings/ChatSettingsImportExportTab.svelte';
+export { default as ChatSettingsSystemTab } from './ChatSettings/ChatSettingsSystemTab.svelte';
 
 /**
  * Badge indicating parameter source for sampling settings. Shows one of:

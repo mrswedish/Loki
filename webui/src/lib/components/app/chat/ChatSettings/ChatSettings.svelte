@@ -6,12 +6,14 @@
 		Monitor,
 		ChevronLeft,
 		ChevronRight,
-		Database
+		Database,
+		Cpu
 	} from '@lucide/svelte';
 	import {
 		ChatSettingsFooter,
 		ChatSettingsImportExportTab,
-		ChatSettingsFields
+		ChatSettingsFields,
+		ChatSettingsSystemTab
 	} from '$lib/components/app';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
@@ -276,6 +278,11 @@
 			title: SETTINGS_SECTION_TITLES.IMPORT_EXPORT,
 			icon: Database,
 			fields: []
+		},
+		{
+			title: SETTINGS_SECTION_TITLES.SYSTEM,
+			icon: Cpu,
+			fields: []
 		}
 	];
 
@@ -512,7 +519,9 @@
 					<h3 class="text-lg font-semibold">{currentSection.title}</h3>
 				</div>
 
-				{#if currentSection.title === SETTINGS_SECTION_TITLES.IMPORT_EXPORT}
+				{#if currentSection.title === SETTINGS_SECTION_TITLES.SYSTEM}
+					<ChatSettingsSystemTab />
+				{:else if currentSection.title === SETTINGS_SECTION_TITLES.IMPORT_EXPORT}
 					<ChatSettingsImportExportTab />
 				{:else}
 					<div class="space-y-6">

@@ -102,7 +102,7 @@ async fn find_release_asset() -> Result<(String, String), String> {
         .map_err(|e| format!("HTTP client error: {}", e))?;
 
     let resp = client
-        .get("https://api.github.com/repos/ggerganov/llama.cpp/releases/latest")
+        .get("https://api.github.com/repos/ggml-org/llama.cpp/releases/latest")
         .send()
         .await
         .map_err(|e| format!("GitHub API fel: {}", e))?;

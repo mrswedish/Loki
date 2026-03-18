@@ -147,14 +147,11 @@ async fn find_release_asset() -> Result<(String, String), String> {
     Ok((url, tag))
 }
 
-#[cfg(all(target_os = "windows", not(feature = "cpu-only")))]
+#[cfg(target_os = "windows")]
 fn platform_key() -> &'static str {
+    // Both GPU and CPU builds use the same Vulkan binary.
+    // The cpu-only feature controls --n-gpu-layers and Vulkan device env vars at runtime.
     "bin-win-vulkan-x64"
-}
-
-#[cfg(all(target_os = "windows", feature = "cpu-only"))]
-fn platform_key() -> &'static str {
-    "bin-win-avx2-x64"
 }
 
 #[cfg(target_os = "macos")]

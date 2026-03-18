@@ -117,7 +117,14 @@ impl InferenceEngine {
 		cmd.arg("--n-gpu-layers").arg(gpu_layers.to_string());
 		cmd.arg("--jinja");
 
-		#[cfg(target_os = "windows")]
+		#[cfg(all(target_os = "windows", feature = "cpu-only"))]
+		{
+			// Hide all Vulkan devices so the Vulkan binary runs fully on CPU
+			cmd.env("GGML_VK_VISIBLE_DEVICES", "");
+			cmd.env("GGML_VULKAN_DEVICE", "");
+		}
+
+		#[cfg(all(target_os = "windows", not(feature = "cpu-only")))]
 		{
 			let index = gpu_index.unwrap_or(-1);
 			if index >= 0 {

@@ -157,7 +157,8 @@ async fn find_release_asset() -> Result<(String, String), String> {
 fn platform_keys() -> Vec<&'static str> {
     #[cfg(all(target_os = "windows", feature = "cpu-only"))]
     return vec![
-        "bin-win-avx2-x64",
+        "bin-win-cpu-x64",      // nytt namn från b8000+
+        "bin-win-avx2-x64",     // äldre releases
         "bin-win-openblas-x64",
         "bin-win-avx-x64",
         "bin-win-noavx-x64",

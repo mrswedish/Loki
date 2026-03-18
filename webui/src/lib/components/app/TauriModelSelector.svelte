@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { Settings } from '@lucide/svelte';
 	import {
 		listLocalModels,
 		listAvailableModels,
@@ -15,8 +16,11 @@
 	} from '$lib/tauri-bridge';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { settingsStore } from '$lib/stores/settings.svelte';
+	import { DialogChatSettings } from '$lib/components/app';
 
 	let { onServerStarted, onCancel }: { onServerStarted?: () => void; onCancel?: () => void } = $props();
+
+	let settingsOpen = $state(false);
 
 	let localModels = $state<ModelInfo[]>([]);
 	let availableModels = $state<ModelStatus[]>([]);
@@ -126,22 +130,33 @@
 	}
 </script>
 
-<div class="bg-background fixed inset-0 z-[9999] flex items-center justify-center">
+<DialogChatSettings bind:open={settingsOpen} />
+
+<div class="bg-background fixed inset-0 z-[9999] flex items-start justify-center overflow-y-auto">
 	<div class="w-full max-w-lg space-y-6 p-8">
 		<div class="flex items-start justify-between">
 			<div class="space-y-1">
 				<h1 class="text-foreground text-2xl font-semibold tracking-tight">Välj en modell</h1>
 				<p class="text-muted-foreground text-sm">Klicka på en nedladdad modell för att starta.</p>
 			</div>
-			{#if onCancel}
+			<div class="flex items-center gap-1">
 				<button
-					onclick={onCancel}
+					onclick={() => (settingsOpen = true)}
 					class="text-muted-foreground hover:text-foreground rounded p-1 transition-colors"
-					title="Stäng"
+					title="Inställningar"
 				>
-					<svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+					<Settings class="h-5 w-5" />
 				</button>
-			{/if}
+				{#if onCancel}
+					<button
+						onclick={onCancel}
+						class="text-muted-foreground hover:text-foreground rounded p-1 transition-colors"
+						title="Stäng"
+					>
+						<svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+					</button>
+				{/if}
+			</div>
 		</div>
 
 		{#if error}

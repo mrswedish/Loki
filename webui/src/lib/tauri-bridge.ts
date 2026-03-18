@@ -106,6 +106,17 @@ export async function updateServerBinary(): Promise<void> {
 	await invoke<void>('update_server_binary');
 }
 
+/** Returnerar true om llama-server-binären finns på disk (oavsett om version.txt finns). */
+export async function serverBinaryExists(): Promise<boolean> {
+	if (!isTauriEnv()) return false;
+	return invoke<boolean>('server_binary_exists');
+}
+
+/** Laddar ned (eller om-laddar) llama-server-binären och returnerar versionstaggen. */
+export async function downloadServerBinary(): Promise<string> {
+	return invoke<string>('download_server_binary');
+}
+
 /** Returnerar true om llama-server-processen svarar just nu. */
 export async function checkServerHealth(): Promise<boolean> {
 	if (!isTauriEnv()) return true;

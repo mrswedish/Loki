@@ -127,6 +127,19 @@ fn update_server_binary(app: tauri::AppHandle) -> Result<(), String> {
 	llama_server::clear_server_binary(&app)
 }
 
+/// Returns true if the llama-server binary file exists (even if version.txt is missing).
+#[tauri::command]
+fn server_binary_exists(app: tauri::AppHandle) -> bool {
+	llama_server::server_binary_path(&app).exists()
+}
+
+/// Downloads (or re-downloads) the llama-server binary and returns the installed version tag.
+#[tauri::command]
+async fn download_server_binary(app: tauri::AppHandle) -> Result<String, String> {
+	llama_server::ensure_server_binary(&app).await?;
+	Ok(llama_server::get_installed_version(&app).unwrap_or_else(|| "okänd".to_string()))
+}
+
 // ─── Server Lifecycle ────────────────────────────────────
 
 /// Starta llama-server med vald modell. Returnerar "http://127.0.0.1:{port}".
@@ -209,6 +222,8 @@ pub fn run() {
 			// Binary management
 			get_server_binary_version,
 			update_server_binary,
+			server_binary_exists,
+			download_server_binary,
 			// Server lifecycle
 			start_server,
 			stop_server,

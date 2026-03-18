@@ -1,42 +1,54 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { RefreshCw, HardDrive, CheckCircle, AlertCircle } from '@lucide/svelte';
+	import { RefreshCw, HardDrive, CheckCircle, AlertCircle, HelpCircle } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { getServerBinaryVersion, updateServerBinary, stopServer, startServer } from '$lib/tauri-bridge';
-	import { serverStore } from '$lib/stores/server.svelte';
+	import {
+		getServerBinaryVersion,
+		updateServerBinary,
+		serverBinaryExists,
+		downloadServerBinary
+	} from '$lib/tauri-bridge';
 	import { toast } from 'svelte-sonner';
 
-	let installedVersion: string | null = $state(null);
-	let loading = $state(true);
+	type BinaryState = 'loading' | 'missing' | 'unknown-version' | 'ok';
+
+	let binaryState = $state<BinaryState>('loading');
+	let installedVersion = $state<string | null>(null);
 	let updating = $state(false);
 
 	onMount(async () => {
-		installedVersion = await getServerBinaryVersion();
-		loading = false;
+		await refreshState();
 	});
+
+	async function refreshState() {
+		binaryState = 'loading';
+		const version = await getServerBinaryVersion();
+		if (version) {
+			installedVersion = version;
+			binaryState = 'ok';
+		} else {
+			const exists = await serverBinaryExists();
+			binaryState = exists ? 'unknown-version' : 'missing';
+		}
+	}
 
 	async function handleUpdate() {
 		updating = true;
 		try {
+			// Rensa gammal binär
 			await updateServerBinary();
+			binaryState = 'missing';
 			installedVersion = null;
-			toast.info('Binären raderad – ny version laddas ned vid nästa start.');
 
-			const modelPath = serverStore.props?.model_path;
-			if (modelPath) {
-				toast.info('Startar om servern...');
-				await stopServer();
-				const ctx = serverStore.contextSize ?? 4096;
-				const gpu = serverStore.activeGpuIndex ?? -1;
-				await startServer(modelPath, ctx, gpu);
-				await serverStore.fetch();
-				installedVersion = await getServerBinaryVersion();
-				toast.success('Klar! llama-server uppdaterad till ' + (installedVersion ?? 'okänd version'));
-			} else {
-				toast.success('Binären raderas – ny version hämtas när du startar nästa modell.');
-			}
+			// Ladda ned direkt
+			toast.info('Laddar ned senaste llama-server...');
+			const version = await downloadServerBinary();
+			installedVersion = version;
+			binaryState = 'ok';
+			toast.success('Klar! llama-server ' + version + ' installerad.');
 		} catch (e) {
-			toast.error('Uppdatering misslyckades: ' + (e instanceof Error ? e.message : String(e)));
+			toast.error('Misslyckades: ' + (e instanceof Error ? e.message : String(e)));
+			await refreshState();
 		} finally {
 			updating = false;
 		}
@@ -51,14 +63,21 @@
 		</div>
 
 		<div class="mb-4 flex items-center gap-2">
-			{#if loading}
-				<span class="text-sm text-muted-foreground">Kontrollerar version...</span>
-			{:else if installedVersion}
+			{#if binaryState === 'loading'}
+				<span class="text-sm text-muted-foreground">Kontrollerar...</span>
+			{:else if binaryState === 'ok'}
 				<CheckCircle class="h-4 w-4 text-green-500" />
-				<span class="text-sm">Installerad version: <code class="font-mono">{installedVersion}</code></span>
+				<span class="text-sm">Version: <code class="font-mono">{installedVersion}</code></span>
+			{:else if binaryState === 'unknown-version'}
+				<HelpCircle class="h-4 w-4 text-yellow-500" />
+				<span class="text-sm text-muted-foreground">Installerad – version okänd (äldre installation)</span>
 			{:else}
 				<AlertCircle class="h-4 w-4 text-yellow-500" />
-				<span class="text-sm text-muted-foreground">Ingen binär installerad än</span>
+				{#if updating}
+					<span class="text-sm text-muted-foreground">Laddar ned...</span>
+				{:else}
+					<span class="text-sm text-muted-foreground">Ingen binär installerad</span>
+				{/if}
 			{/if}
 		</div>
 
@@ -66,15 +85,21 @@
 			variant="outline"
 			size="sm"
 			onclick={handleUpdate}
-			disabled={updating || loading}
+			disabled={updating || binaryState === 'loading'}
 			class="gap-2"
 		>
 			<RefreshCw class="h-4 w-4 {updating ? 'animate-spin' : ''}" />
-			{updating ? 'Uppdaterar...' : 'Uppdatera till senaste version'}
+			{#if updating}
+				Laddar ned...
+			{:else if binaryState === 'missing'}
+				Ladda ned llama-server
+			{:else}
+				Uppdatera till senaste version
+			{/if}
 		</Button>
 
 		<p class="mt-3 text-xs text-muted-foreground">
-			Laddar ned senaste llama-server från ggml-org/llama.cpp och startar om.
+			Hämtar senaste llama-server från ggml-org/llama.cpp.
 			Tar ~30–60 sekunder beroende på anslutning.
 		</p>
 	</div>

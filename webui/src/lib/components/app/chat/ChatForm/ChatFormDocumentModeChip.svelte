@@ -87,14 +87,14 @@
 							<mode.icon class="h-3.5 w-3.5 flex-shrink-0" />
 							<span class="font-medium">{mode.label}</span>
 							{#if mode.value === current.value}
-								<span class="ml-auto rounded-full bg-primary/20 px-1.5 py-0.5 text-[10px] text-primary">aktiv</span>
+								<span class="ml-auto rounded-full bg-primary-foreground/20 px-1.5 py-0.5 text-[10px] text-primary-foreground">aktiv</span>
 							{/if}
 						</div>
-						<p class="mb-1 text-xs text-muted-foreground">{mode.description}</p>
+						<p class="mb-1 text-xs text-primary-foreground/80">{mode.description}</p>
 						{#if mode.useCases.length > 0}
 							<ul class="space-y-0.5">
 								{#each mode.useCases as uc (uc)}
-									<li class="text-[11px] text-muted-foreground/80">· {uc}</li>
+									<li class="text-[11px] text-primary-foreground/60">· {uc}</li>
 								{/each}
 							</ul>
 						{/if}

@@ -108,8 +108,11 @@ export function useProcessingState(): UseProcessingStateReturn {
 				return 'Initializing...';
 			case 'chunking':
 				if (processingState.chunking) {
-					const { current, total, phase } = processingState.chunking;
-					const phaseText = phase === 'mapping' ? 'Sammanfattar' : 'Slutför';
+					const { current, total, phase, mode } = processingState.chunking;
+					const phaseText =
+						phase === 'mapping'
+							? mode === 'extract' ? 'Extraherar' : 'Läser'
+							: 'Sammanställer';
 					return `${phaseText} del ${current} av ${total}...`;
 				}
 				return 'Bearbetar i bitar...';

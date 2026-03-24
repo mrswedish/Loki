@@ -52,8 +52,18 @@ Loki är det perfekta verktyget för att bolla känsliga ämnen, effektivisera i
 > [!TIP]
 > **Upplever du att en modell inte startar?** Om du har ett grafikkort med begränsat VRAM (t.ex. 6 GB), prova att sänka **Context Size** i inställningarna till 4096 eller 2048. Detta minskar minneskravet avsevärt vid start.
 
-* **Magisk Chunking (Map-Reduce)** – Appen känner automatiskt av om en text är för stor för kontextfönstret och delar upp den i bitar för att kunna sammanfatta timmar av material utan informationsförlust.
-* **Hårdvaruacceleration med kontroll** – Drar nytta av Vulkan (Windows) eller Metal (macOS). Nyhet i v0.1.43: Möjlighet att manuellt välja GPU-index för att tvinga fram rätt grafikkort på t.ex. bärbara datorer.
+> [!TIP]
+> **Problem med GPU på Windows (t.ex. AMD Radeon)?** Testa CPU-versionen av Loki (`loki-cpu`) som inte använder Vulkan alls. Den är något långsammare men fungerar på i stort sett all hårdvara.
+
+* **Intelligent dokumentanalys (Map-Reduce)** – Appen känner automatiskt av om en text är för stor för kontextfönstret och väljer rätt strategi automatiskt. Tre lägen finns tillgängliga via en chip i chattfältet:
+  * **Auto** – Loki avgör själv om frågan kräver extrahering eller sammanfattning.
+  * **Extrahera** – Söker igenom dokumentet efter meningar kopplade till din specifika fråga. Bäst för "vem ansvarar för X?" eller "lista alla beslut".
+  * **Sammanfatta** – Läser dokumentet progressivt och bygger en sammanhängande helhetsbild. Bäst för mötesprotokoll, rapporter och avtal.
+
+  Under bearbetningen visas realtidsstatus direkt i chattvyn ("Extraherar del 2 av 9…" / "Läser del 2 av 9…").
+
+* **Hårdvaruacceleration med kontroll** – Drar nytta av Vulkan (Windows) eller Metal (macOS). Möjlighet att manuellt välja GPU-index för att tvinga fram rätt grafikkort på t.ex. bärbara datorer.
+* **CPU-version för AMD och äldre hårdvara** – En separat CPU-build (utan Vulkan) finns tillgänglig för maskiner där GPU-versionen inte fungerar, t.ex. vissa AMD Radeon-konfigurationer.
 * **Dynamiskt kontextstöd** – Justera storleken på AI-minnet (tokens) med en enkel slider för att optimera prestanda vs. RAM.
 * **Smart RAM-varning** – Appen beräknar minnesbehovet i realtid och varnar om inställningarna riskerar att överstiga din dators tillgängliga RAM.
 * **Sömlösa modellbyten** – Byt AI-modell i farten från sidomenyn, utan att behöva starta om appen.
@@ -64,6 +74,7 @@ Loki är det perfekta verktyget för att bolla känsliga ämnen, effektivisera i
 * **Visuella teman** – Välj mellan ljust, mörkt eller ett terminalinspirerat grönt retro-tema med scanlines.
 * **Helt på svenska** – Gränssnittet är skapat och fullt översatt för svenska användare.
 * **Portabelt läge** – Kan köras direkt från mappen utan installation (kräver WebView2 på Windows).
+* **Inbyggd binärhantering** – Under *Inställningar → System* visas vilken version av llama.cpp-servern som är installerad. Du kan uppdatera till senaste release med ett klick, direkt inifrån appen.
 
 ---
 

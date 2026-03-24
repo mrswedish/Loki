@@ -64,16 +64,19 @@ function detectIntent(instruction: string): 'summarize' | 'question' {
 	return summarizePatterns.some((p) => lower.includes(p)) ? 'summarize' : 'question';
 }
 
+export type DocumentMode = 'auto' | 'summarize' | 'extract';
+
 /** Returns a fully-populated chunking processing state object. */
 function makeChunkingState(
 	current: number,
 	total: number,
 	phase: 'mapping' | 'reducing',
-	nCtx: number
+	nCtx: number,
+	mode?: 'extract' | 'summarize'
 ): ApiProcessingState {
 	return {
 		status: 'chunking',
-		chunking: { current, total, phase },
+		chunking: { current, total, phase, mode },
 		tokensDecoded: 0,
 		tokensRemaining: 0,
 		contextUsed: 0,
@@ -113,6 +116,11 @@ class ChatStore {
 	currentResponse = $state('');
 	errorDialogState = $state<ErrorDialogState | null>(null);
 	isLoading = $state(false);
+	documentMode = $state<DocumentMode>('auto');
+
+	setDocumentMode(mode: DocumentMode): void {
+		this.documentMode = mode;
+	}
 	chatLoadingStates = new SvelteMap<string, boolean>();
 	chatStreamingStates = new SvelteMap<string, { response: string; messageId: string }>();
 	private abortControllers = new SvelteMap<string, AbortController>();
@@ -627,12 +635,17 @@ class ChatStore {
 		nCtx: number
 	): Promise<void> {
 		const totalText = extras?.map((e) => ('content' in e ? e.content : '')).join('\n\n') || '';
-		const intent = detectIntent(instruction);
+
+		// Resolve mode: explicit override beats auto-detection
+		const resolvedMode: 'extract' | 'summarize' =
+			this.documentMode === 'extract' ? 'extract'
+			: this.documentMode === 'summarize' ? 'summarize'
+			: detectIntent(instruction) === 'summarize' ? 'summarize' : 'extract';
 
 		// Extraction mode can use larger chunks (output is small – just extracted sentences).
 		// Progressive mode needs smaller chunks to leave room for the growing running summary.
 		const chunkSizeChars =
-			intent === 'question' ? Math.floor(nCtx * 2.4) : Math.floor(nCtx * 1.2);
+			resolvedMode === 'extract' ? Math.floor(nCtx * 2.4) : Math.floor(nCtx * 1.2);
 
 		const chunks = ChatService.splitIntoSemanticChunks(totalText, chunkSizeChars);
 
@@ -645,10 +658,10 @@ class ChatStore {
 		const assistantMessage = await this.createAssistantMessage(userMessage.id);
 		conversationsStore.addMessageToActive(assistantMessage);
 
-		if (intent === 'summarize') {
-			await this.handleProgressiveSummarization(convId, instruction, chunks, nCtx, assistantMessage);
+		if (resolvedMode === 'summarize') {
+			await this.handleProgressiveSummarization(convId, instruction, chunks, nCtx, assistantMessage, resolvedMode);
 		} else {
-			await this.handleExtractionMode(convId, instruction, chunks, nCtx, assistantMessage);
+			await this.handleExtractionMode(convId, instruction, chunks, nCtx, assistantMessage, resolvedMode);
 		}
 
 		const idx = conversationsStore.findMessageIndex(userMessage.id);
@@ -666,12 +679,13 @@ class ChatStore {
 		instruction: string,
 		chunks: string[],
 		nCtx: number,
-		assistantMessage: DatabaseMessage
+		assistantMessage: DatabaseMessage,
+		mode: 'extract' | 'summarize' = 'extract'
 	): Promise<void> {
 		const extracts: string[] = [];
 
 		for (let i = 0; i < chunks.length; i++) {
-			this.setProcessingState(convId, makeChunkingState(i + 1, chunks.length, 'mapping', nCtx));
+			this.setProcessingState(convId, makeChunkingState(i + 1, chunks.length, 'mapping', nCtx, mode));
 			this.setChatStreaming(convId, `Extraherar del ${i + 1} av ${chunks.length}...`, assistantMessage.id);
 
 			const prompt =
@@ -706,7 +720,7 @@ class ChatStore {
 
 		const fittedExtracts = await this.ensureSummariesFitContext(extracts, nCtx, convId, assistantMessage);
 
-		this.setProcessingState(convId, makeChunkingState(1, 1, 'reducing', nCtx));
+		this.setProcessingState(convId, makeChunkingState(1, 1, 'reducing', nCtx, mode));
 		this.setChatStreaming(convId, 'Formulerar svar...', assistantMessage.id);
 
 		const finalPrompt =
@@ -732,13 +746,14 @@ class ChatStore {
 		instruction: string,
 		chunks: string[],
 		nCtx: number,
-		assistantMessage: DatabaseMessage
+		assistantMessage: DatabaseMessage,
+		mode: 'extract' | 'summarize' = 'summarize'
 	): Promise<void> {
 		let runningSummary = '';
 
 		// All chunks except the last: build rolling summary non-streaming
 		for (let i = 0; i < chunks.length - 1; i++) {
-			this.setProcessingState(convId, makeChunkingState(i + 1, chunks.length, 'mapping', nCtx));
+			this.setProcessingState(convId, makeChunkingState(i + 1, chunks.length, 'mapping', nCtx, mode));
 			this.setChatStreaming(convId, `Läser del ${i + 1} av ${chunks.length}...`, assistantMessage.id);
 
 			const contextHint = runningSummary
@@ -759,7 +774,7 @@ class ChatStore {
 		}
 
 		// Last chunk: stream the final answer directly to the user
-		this.setProcessingState(convId, makeChunkingState(chunks.length, chunks.length, 'reducing', nCtx));
+		this.setProcessingState(convId, makeChunkingState(chunks.length, chunks.length, 'reducing', nCtx, mode));
 		this.setChatStreaming(convId, 'Formulerar slutsvar...', assistantMessage.id);
 
 		const contextHint = runningSummary

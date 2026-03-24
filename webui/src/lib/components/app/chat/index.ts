@@ -197,6 +197,7 @@ export { default as ChatFormActions } from './ChatForm/ChatFormActions/ChatFormA
  * Triggers onSubmit or onStop callbacks based on current state.
  */
 export { default as ChatFormActionSubmit } from './ChatForm/ChatFormActions/ChatFormActionSubmit.svelte';
+export { default as ChatFormDocumentModeChip } from './ChatForm/ChatFormDocumentModeChip.svelte';
 
 /**
  * Hidden file input element for programmatic file selection.

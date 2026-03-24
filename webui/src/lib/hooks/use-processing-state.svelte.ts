@@ -135,9 +135,14 @@ export function useProcessingState(): UseProcessingStateReturn {
 		const details: string[] = [];
 
 		if (stateToUse.status === 'chunking' && stateToUse.chunking) {
-			const { current, total, phase } = stateToUse.chunking;
-			details.push(`Fas: ${phase === 'mapping' ? 'Analys' : 'Sammanställning'}`);
-			details.push(`Del: ${current}/${total}`);
+			const { current, total, phase, mode } = stateToUse.chunking;
+			const modeLabel =
+				mode === 'extract' ? '🔍 Extraktionsläge' :
+				mode === 'summarize' ? '📄 Sammanfattningsläge' :
+				'⚙️ Dokumentanalys';
+			const phaseLabel = phase === 'mapping' ? 'Analyserar' : 'Sammanställer';
+			details.push(modeLabel);
+			details.push(`${phaseLabel} del ${current}/${total}`);
 			return details;
 		}
 

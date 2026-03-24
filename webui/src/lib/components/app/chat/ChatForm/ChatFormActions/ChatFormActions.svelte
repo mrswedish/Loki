@@ -6,6 +6,7 @@
 		ChatFormActionAttachmentsSheet,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
+		ChatFormDocumentModeChip,
 		McpServersSelector,
 		ModelsSelector,
 		ModelsSelectorSheet
@@ -132,6 +133,11 @@
 	let hasAudioAttachments = $derived(
 		uploadedFiles.some((file) => getFileTypeCategory(file.type) === FileTypeCategory.AUDIO)
 	);
+	let hasDocumentAttachments = $derived(
+		uploadedFiles.some(
+			(file) => !file.type.startsWith('image/') && !file.type.startsWith('audio/')
+		)
+	);
 	let shouldShowRecordButton = $derived(
 		hasAudioModality && !hasText && !hasAudioAttachments && currentConfig.autoMicOnEmpty
 	);
@@ -221,6 +227,10 @@
 			onSettingsClick={() => (showChatSettingsDialogWithMcpSection = true)}
 		/>
 	</div>
+
+	{#if hasDocumentAttachments}
+		<ChatFormDocumentModeChip />
+	{/if}
 
 	<div class="ml-auto flex items-center gap-1.5">
 		{#if isMobile.current}

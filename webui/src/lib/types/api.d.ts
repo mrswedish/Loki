@@ -373,6 +373,7 @@ export interface ApiProcessingState {
 		current: number;
 		total: number;
 		phase: 'mapping' | 'reducing';
+		mode?: 'extract' | 'summarize';
 	};
 }
 

@@ -51,6 +51,56 @@ interface ConversationStateEntry {
 
 const countOccurrences = (source: string, token: string): number =>
 	source ? source.split(token).length - 1 : 0;
+
+/** Detects whether the user wants a full-document summary or a specific question answered. */
+function detectIntent(instruction: string): 'summarize' | 'question' {
+	const lower = instruction.toLowerCase().trim();
+	const summarizePatterns = [
+		'sammanfatta', 'sammanfattning', 'summera', 'beskriv', 'berätta om', 'berätta vad',
+		'vad handlar', 'vad är ämnet', 'vad är detta', 'vad är det här', 'vad innehåller',
+		'ge en översikt', 'ge mig en översikt', 'vad tar upp', 'vad behandlar',
+		'förklara vad', 'summarize', 'summary', 'overview'
+	];
+	return summarizePatterns.some((p) => lower.includes(p)) ? 'summarize' : 'question';
+}
+
+/** Returns a fully-populated chunking processing state object. */
+function makeChunkingState(
+	current: number,
+	total: number,
+	phase: 'mapping' | 'reducing',
+	nCtx: number
+): ApiProcessingState {
+	return {
+		status: 'chunking',
+		chunking: { current, total, phase },
+		tokensDecoded: 0,
+		tokensRemaining: 0,
+		contextUsed: 0,
+		contextTotal: nCtx,
+		outputTokensUsed: 0,
+		outputTokensMax: -1,
+		temperature: 0,
+		topP: 1,
+		speculative: false,
+		hasNextToken: false
+	};
+}
+
+/** Wraps a string prompt in a minimal DatabaseMessage for use with streamChatCompletion. */
+function makeTempMessage(content: string, ref: DatabaseMessage): DatabaseMessage {
+	return {
+		id: 'temp-id',
+		convId: ref.convId,
+		role: MessageRole.USER,
+		content,
+		timestamp: Date.now(),
+		type: MessageType.TEXT,
+		children: [],
+		parent: null,
+		toolCalls: ''
+	} as DatabaseMessage;
+}
 const hasUnclosedReasoningTag = (content: string): boolean =>
 	countOccurrences(content, REASONING_TAGS.START) > countOccurrences(content, REASONING_TAGS.END);
 const wrapReasoningContent = (content: string, reasoningContent?: string): string => {
@@ -564,9 +614,10 @@ class ChatStore {
 	}
 
 	/**
-	 * Handles Map-Reduce flow for large data.
-	 * Uses chain summarization (each chunk carries context from the previous summary)
-	 * and hierarchical reduce (groups summaries if they exceed the context window).
+	 * Entry point for large-text processing.
+	 * Detects intent and routes to the appropriate mode:
+	 *   - 'question'  → Extraction mode  (query-focused, filters irrelevant chunks)
+	 *   - 'summarize' → Progressive mode (rolling summary, streams final answer)
 	 */
 	private async handleMappedMessage(
 		convId: string,
@@ -575,125 +626,154 @@ class ChatStore {
 		parentId: string | undefined,
 		nCtx: number
 	): Promise<void> {
-		const totalText =
-			extras?.map((e) => ('content' in e ? e.content : '')).join('\n\n') || '';
+		const totalText = extras?.map((e) => ('content' in e ? e.content : '')).join('\n\n') || '';
+		const intent = detectIntent(instruction);
 
-		// Conservative chunking: roughly half the context window
-		const chunkSizeChars = Math.floor(nCtx * 1.5); // Very rough conversion to chars
-		const overlap = Math.floor(chunkSizeChars * 0.1);
-		const chunks = ChatService.splitIntoChunks(totalText, chunkSizeChars, overlap);
+		// Extraction mode can use larger chunks (output is small – just extracted sentences).
+		// Progressive mode needs smaller chunks to leave room for the growing running summary.
+		const chunkSizeChars =
+			intent === 'question' ? Math.floor(nCtx * 2.4) : Math.floor(nCtx * 1.2);
 
-		const summaries: string[] = [];
+		const chunks = ChatService.splitIntoSemanticChunks(totalText, chunkSizeChars);
 
-		// Create the assistant message that will show progress
 		const userMessage = await this.addMessage(
 			MessageRole.USER,
-			`[Map-Reduce] Bearbetar stor textmassa (${chunks.length} delar)...`,
+			`[Bearbetar stor textmassa (${chunks.length} delar)...]`,
 			MessageType.TEXT,
 			parentId ?? '-1'
 		);
 		const assistantMessage = await this.createAssistantMessage(userMessage.id);
 		conversationsStore.addMessageToActive(assistantMessage);
 
-		// Map phase – chain summarization: each chunk carries context from the previous summary
-		for (let i = 0; i < chunks.length; i++) {
-			this.setProcessingState(convId, {
-				status: 'chunking',
-				chunking: { current: i + 1, total: chunks.length, phase: 'mapping' },
-				tokensDecoded: 0,
-				tokensRemaining: 0,
-				contextUsed: 0,
-				contextTotal: nCtx,
-				outputTokensUsed: 0,
-				outputTokensMax: -1,
-				temperature: 0,
-				topP: 1,
-				speculative: false,
-				hasNextToken: false
-			});
-
-			this.setChatStreaming(
-				convId,
-				`Sammanfattar del ${i + 1} av ${chunks.length}...`,
-				assistantMessage.id
-			);
-
-			// Include a snippet of the previous summary to maintain document flow
-			const prevSummary = summaries.length > 0 ? summaries[summaries.length - 1] : null;
-			const contextHint = prevSummary
-				? `\n\nKontext från föregående avsnitt: "${prevSummary.slice(0, 400)}"\n`
-				: '';
-
-			const mapPrompt = `Sammanfatta följande del av ett dokument.${contextHint}\nVar objektiv och behåll alla viktiga namn, datum, tekniska detaljer och specifik fakta.\n\nText:\n\n${chunks[i]}`;
-
-			const summary = await ChatService.sendMessage(
-				[{ role: MessageRole.USER, content: mapPrompt }],
-				{ stream: false, temperature: 0.0 }
-			);
-
-			if (summary) summaries.push(summary as string);
+		if (intent === 'summarize') {
+			await this.handleProgressiveSummarization(convId, instruction, chunks, nCtx, assistantMessage);
+		} else {
+			await this.handleExtractionMode(convId, instruction, chunks, nCtx, assistantMessage);
 		}
 
-		// Reduce phase – ensure all summaries fit the context window before final generation
-		const fittedSummaries = await this.ensureSummariesFitContext(
-			summaries,
-			nCtx,
-			convId,
-			assistantMessage
-		);
-
-		this.setProcessingState(convId, {
-			status: 'chunking',
-			chunking: { current: 1, total: 1, phase: 'reducing' },
-			tokensDecoded: 0,
-			tokensRemaining: 0,
-			contextUsed: 0,
-			contextTotal: nCtx,
-			outputTokensUsed: 0,
-			outputTokensMax: -1,
-			temperature: 0.7,
-			topP: 1,
-			speculative: false,
-			hasNextToken: false
-		});
-
-		this.setChatStreaming(convId, `Skapar slutgiltigt svar...`, assistantMessage.id);
-
-		const finalPrompt = `Du är Loki, en hjälpsam AI-assistent. Nedan följer information extraherad från ett längre dokument. Din uppgift är att besvara användarens fråga baserat på denna information.
-
-VIKTIGT:
-1. Svara direkt till användaren.
-2. Nämn INTE att du läser sammanfattningar eller att dokumentet var uppdelat.
-3. Agera som om du har läst hela dokumentet själv.
-4. Om användaren ber om en sammanfattning, ge dem en sammanhängande och välstrukturerad sådan.
-
-Användarens fråga: "${instruction}"
-
-Information från dokumentet:
-${fittedSummaries.join('\n\n')}`;
-
-		// Now perform the final generation as a stream so the user sees it
-		await this.streamChatCompletion(
-			[
-				{
-					id: 'temp-id',
-					convId: assistantMessage.convId,
-					role: MessageRole.USER,
-					content: finalPrompt,
-					timestamp: Date.now(),
-					type: MessageType.TEXT,
-					children: [],
-					parent: null,
-					toolCalls: ''
-				} as DatabaseMessage
-			],
-			assistantMessage
-		);
-
-		// Clean up the temporary user message content
 		const idx = conversationsStore.findMessageIndex(userMessage.id);
 		conversationsStore.updateMessageAtIndex(idx, { content: instruction });
 		DatabaseService.updateMessage(userMessage.id, { content: instruction }).catch(console.error);
+	}
+
+	/**
+	 * Extraction mode – for specific questions.
+	 * Each chunk is scanned for sentences relevant to the user's question.
+	 * Irrelevant chunks ([irrelevant]) are silently dropped before the reduce step.
+	 */
+	private async handleExtractionMode(
+		convId: string,
+		instruction: string,
+		chunks: string[],
+		nCtx: number,
+		assistantMessage: DatabaseMessage
+	): Promise<void> {
+		const extracts: string[] = [];
+
+		for (let i = 0; i < chunks.length; i++) {
+			this.setProcessingState(convId, makeChunkingState(i + 1, chunks.length, 'mapping', nCtx));
+			this.setChatStreaming(convId, `Extraherar del ${i + 1} av ${chunks.length}...`, assistantMessage.id);
+
+			const prompt =
+				`Dokument-del:\n${chunks[i]}\n\n` +
+				`Fråga: "${instruction}"\n\n` +
+				`Extrahera EXAKT de meningar och stycken som är relevanta för frågan. ` +
+				`Kopiera dem ordagrant – komprimera inte. ` +
+				`Om inget är relevant, svara bara: [irrelevant]`;
+
+			const result = await ChatService.sendMessage(
+				[{ role: MessageRole.USER, content: prompt }],
+				{ stream: false, temperature: 0.0 }
+			);
+
+			const trimmed = (result as string)?.trim() ?? '';
+			if (trimmed && !trimmed.toLowerCase().startsWith('[irrelevant]') && trimmed.length > 30) {
+				extracts.push(trimmed);
+			}
+		}
+
+		if (extracts.length === 0) {
+			await this.streamChatCompletion(
+				[makeTempMessage(
+					`Dokumentet verkar inte innehålla information om "${instruction}". ` +
+					`Berätta för användaren att du inte hittade relevant information i det bifogade dokumentet.`,
+					assistantMessage
+				)],
+				assistantMessage
+			);
+			return;
+		}
+
+		const fittedExtracts = await this.ensureSummariesFitContext(extracts, nCtx, convId, assistantMessage);
+
+		this.setProcessingState(convId, makeChunkingState(1, 1, 'reducing', nCtx));
+		this.setChatStreaming(convId, 'Formulerar svar...', assistantMessage.id);
+
+		const finalPrompt =
+			`Du är Loki, en hjälpsam AI-assistent. Nedan följer relevanta utdrag ur ett dokument. ` +
+			`Besvara användarens fråga baserat på dessa utdrag.\n\n` +
+			`VIKTIGT:\n` +
+			`1. Svara direkt till användaren.\n` +
+			`2. Nämn INTE att du läser utdrag eller att dokumentet var uppdelat.\n` +
+			`3. Agera som om du har läst hela dokumentet.\n\n` +
+			`Användarens fråga: "${instruction}"\n\n` +
+			`Relevanta utdrag:\n${fittedExtracts.join('\n\n---\n\n')}`;
+
+		await this.streamChatCompletion([makeTempMessage(finalPrompt, assistantMessage)], assistantMessage);
+	}
+
+	/**
+	 * Progressive mode – for summarization requests.
+	 * Maintains a rolling summary across all chunks. The last chunk triggers
+	 * a streamed final answer so the user sees output in real time.
+	 */
+	private async handleProgressiveSummarization(
+		convId: string,
+		instruction: string,
+		chunks: string[],
+		nCtx: number,
+		assistantMessage: DatabaseMessage
+	): Promise<void> {
+		let runningSummary = '';
+
+		// All chunks except the last: build rolling summary non-streaming
+		for (let i = 0; i < chunks.length - 1; i++) {
+			this.setProcessingState(convId, makeChunkingState(i + 1, chunks.length, 'mapping', nCtx));
+			this.setChatStreaming(convId, `Läser del ${i + 1} av ${chunks.length}...`, assistantMessage.id);
+
+			const contextHint = runningSummary
+				? `\n\nLöpande sammanfattning hittills:\n${runningSummary}\n`
+				: '';
+
+			const prompt =
+				`Du läser ett dokument del för del.${contextHint}\n\n` +
+				`Nästa del:\n${chunks[i]}\n\n` +
+				`Uppdatera den löpande sammanfattningen med viktig information från denna del. ` +
+				`Var kompakt men behåll alla viktiga fakta, namn, datum och detaljer.`;
+
+			const updated = await ChatService.sendMessage(
+				[{ role: MessageRole.USER, content: prompt }],
+				{ stream: false, temperature: 0.0 }
+			);
+			if (updated) runningSummary = updated as string;
+		}
+
+		// Last chunk: stream the final answer directly to the user
+		this.setProcessingState(convId, makeChunkingState(chunks.length, chunks.length, 'reducing', nCtx));
+		this.setChatStreaming(convId, 'Formulerar slutsvar...', assistantMessage.id);
+
+		const contextHint = runningSummary
+			? `\n\nSammanfattning av tidigare delar:\n${runningSummary}\n`
+			: '';
+
+		const finalPrompt =
+			`Du är Loki, en hjälpsam AI-assistent. Du har läst ett dokument del för del.${contextHint}\n\n` +
+			`Sista delen:\n${chunks[chunks.length - 1]}\n\n` +
+			`Användarens önskemål: "${instruction}"\n\n` +
+			`Ge nu ett komplett och välstrukturerat svar baserat på hela dokumentet. ` +
+			`Nämn INTE att dokumentet var uppdelat eller att du bearbetat det i delar.`;
+
+		await this.streamChatCompletion([makeTempMessage(finalPrompt, assistantMessage)], assistantMessage);
 	}
 
 	/**

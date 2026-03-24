@@ -97,6 +97,41 @@ export class ChatService {
 	}
 
 	/**
+	 * Splits text into chunks that respect paragraph boundaries.
+	 * Overlap is one paragraph (the last paragraph of the previous chunk)
+	 * for semantic continuity. Falls back to character-based chunking if
+	 * the text has no paragraph structure.
+	 */
+	static splitIntoSemanticChunks(text: string, maxCharsPerChunk: number): string[] {
+		if (!text) return [];
+		const paragraphs = text.split(/\n{2,}/).filter((p) => p.trim().length > 0);
+
+		if (paragraphs.length <= 1) {
+			return ChatService.splitIntoChunks(text, maxCharsPerChunk, Math.floor(maxCharsPerChunk * 0.1));
+		}
+
+		const chunks: string[] = [];
+		let current: string[] = [];
+		let currentLen = 0;
+
+		for (const para of paragraphs) {
+			const addLen = currentLen > 0 ? para.length + 2 : para.length;
+			if (addLen + currentLen > maxCharsPerChunk && current.length > 0) {
+				chunks.push(current.join('\n\n'));
+				// Overlap: carry last paragraph into next chunk for context continuity
+				const overlap = current[current.length - 1];
+				current = [overlap, para];
+				currentLen = overlap.length + para.length + 2;
+			} else {
+				current.push(para);
+				currentLen += addLen;
+			}
+		}
+		if (current.length > 0) chunks.push(current.join('\n\n'));
+		return chunks.filter((c) => c.trim().length > 0);
+	}
+
+	/**
 	 *
 	 *
 	 * Messaging

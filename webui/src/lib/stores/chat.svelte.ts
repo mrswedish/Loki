@@ -648,7 +648,8 @@ class ChatStore {
 		parentId: string | undefined,
 		nCtx: number
 	): Promise<void> {
-		const totalText = extras?.map((e) => ('content' in e ? e.content : '')).join('\n\n') || '';
+		const rawText = extras?.map((e) => ('content' in e ? e.content : '')).join('\n\n') || '';
+		const totalText = ChatService.prefilterText(rawText);
 
 		// Resolve mode: explicit override beats auto-detection
 		const resolvedMode: 'extract' | 'summarize' =
@@ -829,12 +830,37 @@ class ChatStore {
 		const { mapMaxTokens } = calculateChunkTokenBudget(nCtx);
 		const chunkSummaries: string[] = [];
 
+		// ── Fas 0: Anchor – extrahera dokumentkontext från första chunken ─────
+		// Ger modellen ett fast ankare (deltagare, ämne, datum) att referera till
+		// genom hela map-fasen, oavsett var i dokumentet ett chunk befinner sig.
+		let anchor = '';
+		if (chunks.length > 1) {
+			this.setChatStreaming(convId, 'Identifierar dokumentkontext...', assistantMessage.id);
+			const anchorPrompt =
+				`Du läser början av ett dokument (möte, rapport eller transkribering).\n\n` +
+				`TEXT:\n${chunks[0]}\n\n` +
+				`Extrahera kortfattat (max 5 meningar):\n` +
+				`• Dokumenttyp och ämne\n` +
+				`• Deltagare/talare (om det framgår)\n` +
+				`• Datum/tidsram (om det framgår)\n` +
+				`Svara ENBART med dessa punkter. Inga egna slutsatser.`;
+
+			const anchorResult = await ChatService.sendMessage(
+				[{ role: MessageRole.USER, content: anchorPrompt }],
+				{ stream: false, temperature: 0.0, max_tokens: 150 }
+			);
+			anchor = (anchorResult as string)?.trim() ?? '';
+		}
+
+		const anchorHint = anchor ? `DOKUMENTKONTEXT:\n${anchor}\n\n` : '';
+
 		// ── Fas 1: Map – oberoende per chunk ─────────────────────────────────
 		for (let i = 0; i < chunks.length; i++) {
 			this.setProcessingState(convId, makeChunkingState(i + 1, chunks.length, 'mapping', nCtx, mode));
 			this.setChatStreaming(convId, `Analyserar del ${i + 1} av ${chunks.length}...`, assistantMessage.id);
 
 			const mapPrompt =
+				`${anchorHint}` +
 				`Du analyserar ett textstycke ur ett längre dokument.\n\n` +
 				`TEXTSTYCKE:\n${chunks[i]}\n\n` +
 				`Skriv en kortfattad sammanfattning av detta stycke som bullet points (•).\n` +

@@ -1,6 +1,7 @@
 import { getJsonHeaders } from '$lib/utils/api-headers';
 import { formatAttachmentText } from '$lib/utils/formatters';
 import { isAbortError } from '$lib/utils/abort';
+import { extractKeySentenceText } from '$lib/utils/text-scoring';
 import { getServerBase } from '$lib/server-url';
 import {
 	AGENTIC_REGEX,
@@ -204,6 +205,20 @@ export class ChatService {
 			}
 		}
 		return result;
+	}
+
+	/**
+	 * Extractive pre-filter: tar bort utfyllnad och upprepningar via IDF-scoring
+	 * innan chunkning. Synkron, < 5 ms för typiska protokoll.
+	 * Aktiveras bara om texten överstiger MIN_CHARS (~2 000 tokens).
+	 *
+	 * @param text       Hela dokumenttexten
+	 * @param keepRatio  Andel meningar att behålla (0.55–0.75). Default 0.65.
+	 */
+	static prefilterText(text: string, keepRatio = 0.65): string {
+		const MIN_CHARS = 8_000;
+		if (text.length < MIN_CHARS) return text;
+		return extractKeySentenceText(text, keepRatio);
 	}
 
 	/**

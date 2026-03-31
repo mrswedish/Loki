@@ -90,6 +90,20 @@ function makeChunkingState(
 	};
 }
 
+/**
+ * Calculates token budgets for the independent map-reduce summarization pipeline.
+ * Budget: 45% of nCtx for chunk input, 20% for map output.
+ */
+function calculateChunkTokenBudget(nCtx: number): {
+	chunkInputTokens: number;
+	mapMaxTokens: number;
+} {
+	return {
+		chunkInputTokens: Math.floor(nCtx * 0.45),
+		mapMaxTokens: Math.floor(nCtx * 0.20)
+	};
+}
+
 /** Wraps a string prompt in a minimal DatabaseMessage for use with streamChatCompletion. */
 function makeTempMessage(content: string, ref: DatabaseMessage): DatabaseMessage {
 	return {
@@ -642,12 +656,14 @@ class ChatStore {
 			: this.documentMode === 'summarize' ? 'summarize'
 			: detectIntent(instruction) === 'summarize' ? 'summarize' : 'extract';
 
-		// Extraction mode can use larger chunks (output is small – just extracted sentences).
-		// Progressive mode needs smaller chunks to leave room for the growing running summary.
-		const chunkSizeChars =
-			resolvedMode === 'extract' ? Math.floor(nCtx * 2.4) : Math.floor(nCtx * 1.2);
+		// Token-based chunk sizing: extract mode gets up to 2× the summarize budget.
+		const { chunkInputTokens } = calculateChunkTokenBudget(nCtx);
+		const effectiveTokenBudget =
+			resolvedMode === 'extract'
+				? Math.min(chunkInputTokens * 2, Math.floor(nCtx * 0.8))
+				: chunkInputTokens;
 
-		const chunks = ChatService.splitIntoSemanticChunks(totalText, chunkSizeChars);
+		const chunks = await ChatService.splitIntoSemanticChunksByTokens(totalText, effectiveTokenBudget);
 
 		const userMessage = await this.addMessage(
 			MessageRole.USER,
@@ -659,7 +675,7 @@ class ChatStore {
 		conversationsStore.addMessageToActive(assistantMessage);
 
 		if (resolvedMode === 'summarize') {
-			await this.handleProgressiveSummarization(convId, instruction, chunks, nCtx, assistantMessage, resolvedMode);
+			await this.handleIndependentMapSummarize(convId, instruction, chunks, nCtx, assistantMessage, resolvedMode);
 		} else {
 			await this.handleExtractionMode(convId, instruction, chunks, nCtx, assistantMessage, resolvedMode);
 		}
@@ -792,6 +808,89 @@ class ChatStore {
 	}
 
 	/**
+	 * Independent Map-Reduce summarization pipeline.
+	 * Replaces handleProgressiveSummarization – avoids the running-summary
+	 * accumulation problem on small models.
+	 *
+	 * Phase 1 (Map):   Each chunk is summarized independently as bullet points.
+	 *                  max_tokens caps output to prevent runaway growth.
+	 * Phase 2 (Reduce):Reuses ensureSummariesFitContext() to hierarchically
+	 *                  merge bullet summaries until they fit in context.
+	 * Phase 3 (Synth): Streams the final answer to the user.
+	 */
+	private async handleIndependentMapSummarize(
+		convId: string,
+		instruction: string,
+		chunks: string[],
+		nCtx: number,
+		assistantMessage: DatabaseMessage,
+		mode: 'extract' | 'summarize' = 'summarize'
+	): Promise<void> {
+		const { mapMaxTokens } = calculateChunkTokenBudget(nCtx);
+		const chunkSummaries: string[] = [];
+
+		// ── Fas 1: Map – oberoende per chunk ─────────────────────────────────
+		for (let i = 0; i < chunks.length; i++) {
+			this.setProcessingState(convId, makeChunkingState(i + 1, chunks.length, 'mapping', nCtx, mode));
+			this.setChatStreaming(convId, `Analyserar del ${i + 1} av ${chunks.length}...`, assistantMessage.id);
+
+			const mapPrompt =
+				`Du analyserar ett textstycke ur ett längre dokument.\n\n` +
+				`TEXTSTYCKE:\n${chunks[i]}\n\n` +
+				`Skriv en kortfattad sammanfattning av detta stycke som bullet points (•).\n` +
+				`Regler:\n` +
+				`• Inkludera alla viktiga fakta, namn, datum, siffror och beslut.\n` +
+				`• Uteslut upprepningar och utfyllnad.\n` +
+				`• Skriv på svenska. Svara ENBART med bullet points – ingen inledning eller avslutning.`;
+
+			const result = await ChatService.sendMessage(
+				[{ role: MessageRole.USER, content: mapPrompt }],
+				{ stream: false, temperature: 0.0, max_tokens: mapMaxTokens }
+			);
+			const trimmed = (result as string)?.trim() ?? '';
+			if (trimmed.length > 0) chunkSummaries.push(trimmed);
+		}
+
+		if (chunkSummaries.length === 0) {
+			await this.streamChatCompletion(
+				[makeTempMessage(
+					'Dokumentet verkar inte innehålla sammanfattningsbar information. Berätta för användaren att du inte kunde generera en sammanfattning.',
+					assistantMessage
+				)],
+				assistantMessage
+			);
+			return;
+		}
+
+		// ── Fas 2: Reduce – hierarkisk sammanslagning ─────────────────────────
+		this.setProcessingState(convId, makeChunkingState(1, 1, 'reducing', nCtx, mode));
+		this.setChatStreaming(convId, 'Kombinerar sammanfattningar...', assistantMessage.id);
+		const fittedSummaries = await this.ensureSummariesFitContext(
+			chunkSummaries,
+			nCtx,
+			convId,
+			assistantMessage
+		);
+
+		// ── Fas 3: Syntes – streaming till användaren ─────────────────────────
+		this.setProcessingState(convId, makeChunkingState(1, 1, 'reducing', nCtx, mode));
+		this.setChatStreaming(convId, 'Formulerar svar...', assistantMessage.id);
+
+		const synthesisPrompt =
+			`Du är Loki, en hjälpsam AI-assistent. Du har analyserat ett dokument och ` +
+			`extraherat nyckelinformation som sammanfattningspunkter.\n\n` +
+			`NYCKELINFORMATION FRÅN DOKUMENTET:\n${fittedSummaries.join('\n\n')}\n\n` +
+			`VIKTIGT:\n` +
+			`1. Svara direkt till användaren baserat på punkterna ovan.\n` +
+			`2. Nämn INTE att dokumentet var uppdelat eller att du bearbetat det i steg.\n` +
+			`3. Agera som om du har läst hela dokumentet.\n` +
+			`4. Strukturera svaret väl med rubriker om det är naturligt.\n\n` +
+			`Användarens önskemål: "${instruction}"`;
+
+		await this.streamChatCompletion([makeTempMessage(synthesisPrompt, assistantMessage)], assistantMessage);
+	}
+
+	/**
 	 * Ensures combined summaries fit within the context window.
 	 * If too large, groups adjacent summaries and reduces each group (hierarchical reduce),
 	 * recursing until they fit. Max depth: 3.
@@ -825,12 +924,13 @@ class ChatStore {
 			assistantMessage.id
 		);
 
+		const { mapMaxTokens } = calculateChunkTokenBudget(nCtx);
 		const reducedSummaries: string[] = [];
 		for (const group of groups) {
 			const prompt = `Sammanfatta dessa relaterade avsnitt till ett sammanhängande stycke. Behåll alla viktiga namn, datum och detaljer:\n\n${group.join('\n\n---\n\n')}`;
 			const result = await ChatService.sendMessage(
 				[{ role: MessageRole.USER, content: prompt }],
-				{ stream: false, temperature: 0.0 }
+				{ stream: false, temperature: 0.0, max_tokens: mapMaxTokens }
 			);
 			if (result) reducedSummaries.push(result as string);
 		}

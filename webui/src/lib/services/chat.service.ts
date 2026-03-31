@@ -132,6 +132,81 @@ export class ChatService {
 	}
 
 	/**
+	 * Splits text into semantic chunks where each chunk is guaranteed to be
+	 * within maxTokensPerChunk tokens. Uses a char-based heuristic for the
+	 * initial split, then verifies each candidate with actual tokenization.
+	 */
+	static async splitIntoSemanticChunksByTokens(
+		text: string,
+		maxTokensPerChunk: number
+	): Promise<string[]> {
+		if (!text) return [];
+		// Swedish text: ~3.5 chars per token on average. Used only as first-pass heuristic.
+		const CHARS_PER_TOKEN_ESTIMATE = 3.5;
+		const maxCharsGuess = Math.floor(maxTokensPerChunk * CHARS_PER_TOKEN_ESTIMATE);
+		const paragraphs = text.split(/\n{2,}/).filter((p) => p.trim().length > 0);
+
+		if (paragraphs.length <= 1) {
+			const coarseChunks = ChatService.splitIntoChunks(
+				text,
+				maxCharsGuess,
+				Math.floor(maxCharsGuess * 0.1)
+			);
+			return ChatService._verifyAndSplitByTokens(coarseChunks, maxTokensPerChunk);
+		}
+
+		const candidates: string[] = [];
+		let current: string[] = [];
+		let currentLen = 0;
+
+		for (const para of paragraphs) {
+			const addLen = currentLen > 0 ? para.length + 2 : para.length;
+			if (addLen + currentLen > maxCharsGuess && current.length > 0) {
+				candidates.push(current.join('\n\n'));
+				// Overlap: carry last paragraph for semantic continuity
+				const overlap = current[current.length - 1];
+				current = [overlap, para];
+				currentLen = overlap.length + para.length + 2;
+			} else {
+				current.push(para);
+				currentLen += addLen;
+			}
+		}
+		if (current.length > 0) candidates.push(current.join('\n\n'));
+
+		return ChatService._verifyAndSplitByTokens(
+			candidates.filter((c) => c.trim().length > 0),
+			maxTokensPerChunk
+		);
+	}
+
+	/** Verifies each candidate chunk is within maxTokens; recursively halves oversized ones. */
+	private static async _verifyAndSplitByTokens(
+		candidates: string[],
+		maxTokensPerChunk: number
+	): Promise<string[]> {
+		const result: string[] = [];
+		for (const candidate of candidates) {
+			const tokens = await ChatService.tokenize(candidate);
+			if (tokens.length <= maxTokensPerChunk) {
+				result.push(candidate);
+			} else {
+				const mid = Math.floor(candidate.length / 2);
+				const splitPoint =
+					candidate.lastIndexOf('\n', mid) !== -1 ? candidate.lastIndexOf('\n', mid) : mid;
+				const sub = await ChatService._verifyAndSplitByTokens(
+					[candidate.slice(0, splitPoint).trim(), candidate.slice(splitPoint).trim()].filter(
+						Boolean
+					),
+					maxTokensPerChunk
+				);
+				result.push(...sub);
+			}
+		}
+		return result;
+	}
+
+	/**
 	 *
 	 *
 	 * Messaging

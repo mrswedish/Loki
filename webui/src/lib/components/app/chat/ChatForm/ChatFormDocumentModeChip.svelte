@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { FileSearch, BookOpen, Wand2, Info } from '@lucide/svelte';
+	import { FileSearch, BookOpen, Wand2, Info, ShieldCheck } from '@lucide/svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { chatStore, type DocumentMode } from '$lib/stores/chat.svelte';
 
@@ -50,6 +50,19 @@
 				'Ge mig en översikt',
 				'Sammanfatta detta avtal'
 			]
+		},
+		{
+			value: 'anonymize',
+			label: 'Anonymisera',
+			shortLabel: 'Anonymisera',
+			icon: ShieldCheck,
+			description: 'GDPR-säkrar dokumentet genom att ersätta personuppgifter med pseudonymer.',
+			useCases: [
+				'Mötesprotokoll med personuppgifter',
+				'Rapporter och avtal',
+				'Transkriberingar från möten',
+				'Dokument som ska delas externt'
+			]
 		}
 	];
 
@@ -99,7 +112,7 @@
 							</ul>
 						{/if}
 					</div>
-					{#if mode.value !== 'summarize'}
+					{#if mode.value !== 'anonymize'}
 						<div class="border-t border-border/30"></div>
 					{/if}
 				{/each}

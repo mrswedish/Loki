@@ -14,6 +14,12 @@ De flesta moderna AI-assistenter gör dig beroende av en tredjepart – du skick
 
 Loki ger dig makten tillbaka. Modellen bor hos dig. Beräkningen sker lokalt. Du är helt oberoende av uppkoppling och allt du gör förblir strikt konfidentiellt.
 
+**Lokis två huvudsyften:**
+
+1. **Mötesanteckningar från transkriberingar** – Klistra in eller bifoga din transkribering (t.ex. exporterad från Teams, Zoom eller liknande) och låt Loki skapa strukturerade mötesanteckningar med beslut, action points och nyckelinformation. Allt sker lokalt – transkriberingen lämnar aldrig din enhet.
+
+2. **GDPR-säkra dokument** – Använd Anonymisera-läget för att maskera personuppgifter (namn, personnummer, e-post, telefonnummer, adresser) innan ett dokument delas vidare. Loki ersätter PII med konsekventa pseudonymer genom hela dokumentet.
+
 ---
 
 ## Säkerhet och integritet på riktigt
@@ -53,12 +59,13 @@ Loki är det perfekta verktyget för att bolla känsliga ämnen, effektivisera i
 > [!TIP]
 > **Problem med GPU på Windows (t.ex. AMD Radeon)?** Testa CPU-versionen av Loki (`loki-cpu`) som inte använder Vulkan alls. Den är något långsammare men fungerar på i stort sett all hårdvara.
 
-* **Intelligent dokumentanalys (Map-Reduce)** – Appen känner automatiskt av om en text är för stor för kontextfönstret och väljer rätt strategi automatiskt. Tre lägen finns tillgängliga via en chip i chattfältet:
+* **Intelligent dokumentanalys (Map-Reduce)** – Appen känner automatiskt av om en text är för stor för kontextfönstret och väljer rätt strategi automatiskt. Fyra lägen finns tillgängliga via en chip i chattfältet:
   * **Auto** – Loki avgör själv om frågan kräver extrahering eller sammanfattning.
   * **Extrahera** – Söker igenom dokumentet efter meningar kopplade till din specifika fråga. Bäst för "vem ansvarar för X?" eller "lista alla beslut".
-  * **Sammanfatta** – Läser dokumentet progressivt och bygger en sammanhängande helhetsbild. Bäst för mötesprotokoll, rapporter och avtal.
+  * **Sammanfatta** – Läser dokumentet i oberoende delar och bygger en sammanhängande helhetsbild. Bäst för mötesprotokoll, rapporter och avtal.
+  * **Anonymisera** – GDPR-säkrar dokumentet genom att ersätta personuppgifter med pseudonymer. Personnummer, e-post och telefonnummer hanteras via regelbaserad kod; namn och organisationer via LLM med konsekvent namnkarta.
 
-  Under bearbetningen visas realtidsstatus direkt i chattvyn ("Extraherar del 2 av 9…" / "Läser del 2 av 9…").
+  Under bearbetningen visas realtidsstatus direkt i chattvyn ("Extraherar del 2 av 9…" / "Anonymiserar del 2 av 9…").
 
 * **Hårdvaruacceleration med kontroll** – Drar nytta av Vulkan (Windows) eller Metal (macOS). Möjlighet att manuellt välja GPU-index för att tvinga fram rätt grafikkort på t.ex. bärbara datorer.
 * **CPU-version för AMD och äldre hårdvara** – En separat CPU-build (utan Vulkan) finns tillgänglig för maskiner där GPU-versionen inte fungerar, t.ex. vissa AMD Radeon-konfigurationer.
@@ -73,6 +80,20 @@ Loki är det perfekta verktyget för att bolla känsliga ämnen, effektivisera i
 * **Helt på svenska** – Gränssnittet är skapat och fullt översatt för svenska användare.
 * **Portabelt läge** – Kan köras direkt från mappen utan installation (kräver WebView2 på Windows).
 * **Inbyggd binärhantering** – Under *Inställningar → System* visas vilken version av llama.cpp-servern som är installerad. Du kan uppdatera till senaste release med ett klick, direkt inifrån appen.
+
+---
+
+## Begränsningar & ansvarsfriskrivning
+
+**Anonymiseringsfunktionen** är ett AI-assisterat verktyg – inte en juridisk garanti.
+
+| Vad du kan förvänta dig | Vad du alltid bör göra |
+| --- | --- |
+| ~85–95 % av personuppgifter identifieras automatiskt | Granska alltid resultatet manuellt innan du delar vidare |
+| Konsekvent namnbyte genom hela dokumentet (samma person → samma pseudonym) | Verifiera att alla relevanta namn och roller ersatts |
+| Regelbaserad säker hantering av personnummer, e-post och telefon | Använd inte output utan granskning i juridiska eller känsliga sammanhang |
+
+> **Obs:** Anonymiseringen är ett stöd, inte en ersättning för manuell GDPR-granskning. Kontrollera alltid att output uppfyller dina specifika krav innan det används.
 
 ---
 

@@ -7,6 +7,7 @@ mod model_download;
 mod inference;
 
 use tauri::Manager;
+use tauri_plugin_dialog::DialogExt;
 
 pub fn get_app_dir(app: &tauri::AppHandle) -> PathBuf {
 	app.path().app_data_dir().expect("Could not find app_data directory")
@@ -23,6 +24,25 @@ pub fn ensure_dirs(app: &tauri::AppHandle) {
 			fs::create_dir_all(dir).ok();
 		}
 	}
+}
+
+// ─── File Export ─────────────────────────────────────────
+
+/// Opens a native "Save As" dialog and writes the given text content to the chosen path.
+/// Returns the saved file path on success.
+#[tauri::command]
+async fn save_text_file(content: String, app: tauri::AppHandle) -> Result<String, String> {
+	let path = app
+		.dialog()
+		.file()
+		.set_file_name("anonymiserat-dokument.txt")
+		.add_filter("Textfil", &["txt"])
+		.blocking_save_file()
+		.ok_or_else(|| "Ingen fil vald".to_string())?;
+	let path_str = path.to_string_lossy().to_string();
+	std::fs::write(&path_str, content.as_bytes())
+		.map_err(|e| format!("Skrivfel: {}", e))?;
+	Ok(path_str)
 }
 
 // ─── System Info ─────────────────────────────────────────
@@ -208,6 +228,7 @@ pub fn run() {
 
 	let app = tauri::Builder::default()
 		.plugin(tauri_plugin_opener::init())
+		.plugin(tauri_plugin_dialog::init())
 		.setup(|app| {
 			ensure_dirs(app.handle());
 			model_download::cleanup_unknown_models(app.handle());
@@ -233,6 +254,8 @@ pub fn run() {
 			restart_server_if_dead,
 			// System
 			get_system_info,
+			// File export
+			save_text_file,
 		])
 		.build(tauri::generate_context!())
 		.expect("error while building tauri application");

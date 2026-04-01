@@ -24,6 +24,8 @@
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { ServerModelStatus } from '$lib/enums';
+	import { saveTextFile } from '$lib/tauri-bridge';
+	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		class?: string;
@@ -178,6 +180,16 @@
 
 	function handleCopyModel() {
 		void copyToClipboard(displayedModel ?? '');
+	}
+
+	async function handleSaveAsText() {
+		try {
+			await saveTextFile(message.content ?? messageContent ?? '');
+			toast.success('Fil sparad');
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			if (msg !== 'Ingen fil vald') toast.error(`Kunde inte spara fil: ${msg}`);
+		}
 	}
 
 	$effect(() => {
@@ -359,6 +371,7 @@
 			{onConfirmDelete}
 			{onNavigateToSibling}
 			{onShowDeleteDialogChange}
+			onSaveAsText={handleSaveAsText}
 			showRawOutputSwitch={currentConfig.showRawOutputSwitch}
 			rawOutputEnabled={showRawOutput}
 			onRawOutputToggle={(enabled) => (showRawOutput = enabled)}

@@ -48,17 +48,6 @@ pub fn model_registry() -> Vec<ModelEntry> {
             is_default: true,
         },
         ModelEntry {
-            id: "phi-4-mini".to_string(),
-            name: "Phi-4 Mini".to_string(),
-            filename: "Phi-4-mini-instruct-Q4_K_M.gguf".to_string(),
-            url: "https://huggingface.co/bartowski/Phi-4-mini-instruct-GGUF/resolve/main/Phi-4-mini-instruct-Q4_K_M.gguf".to_string(),
-            size_bytes: 2_500_000_000,
-            description: "Microsoft Phi-4 Mini – stark på instruktioner och svenska texter, Q4 (~2.5 GB)".to_string(),
-            flavor: "Smidig".to_string(),
-            ram_required_gb: 4.0,
-            is_default: false,
-        },
-        ModelEntry {
             id: "ministral-3b".to_string(),
             name: "Ministral 3B".to_string(),
             filename: "Ministral-3-3B-Instruct-2512-Q5_K_M.gguf".to_string(),

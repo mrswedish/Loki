@@ -139,6 +139,14 @@ export interface DownloadProgress {
 	total_bytes: number;
 }
 
+/**
+ * Öppnar en native "Spara som"-dialog och skriver innehållet till vald fil.
+ * Returnerar sökvägen till den sparade filen.
+ */
+export async function saveTextFile(content: string): Promise<string> {
+	return invoke<string>('save_text_file', { content });
+}
+
 /** Lyssna på nedladdningsprogress. Returnerar unlisten-funktion. */
 export async function onDownloadProgress(
 	cb: (p: DownloadProgress) => void

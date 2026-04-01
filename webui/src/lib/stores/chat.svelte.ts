@@ -1032,8 +1032,7 @@ class ChatStore {
 			const result = await ChatService.sendMessage(
 				[
 					{ role: MessageRole.SYSTEM, content: anonSystemPrompt },
-					{ role: MessageRole.USER, content: chunkWithEntities },
-					{ role: MessageRole.ASSISTANT, content: '' }
+					{ role: MessageRole.USER, content: chunkWithEntities }
 				],
 				{ stream: false, temperature: 0.0 }
 			);

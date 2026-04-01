@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Edit, Copy, RefreshCw, Trash2, ArrowRight } from '@lucide/svelte';
+	import { Edit, Copy, RefreshCw, Trash2, ArrowRight, Download } from '@lucide/svelte';
 	import {
 		ActionIcon,
 		ChatMessageBranchingControls,
@@ -28,6 +28,7 @@
 		onConfirmDelete: () => void;
 		onNavigateToSibling?: (siblingId: string) => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
+		onSaveAsText?: () => void;
 		showRawOutputSwitch?: boolean;
 		rawOutputEnabled?: boolean;
 		onRawOutputToggle?: (enabled: boolean) => void;
@@ -45,6 +46,7 @@
 		onNavigateToSibling,
 		onShowDeleteDialogChange,
 		onRegenerate,
+		onSaveAsText,
 		role,
 		siblingInfo = null,
 		showDeleteDialog,
@@ -84,6 +86,10 @@
 
 			{#if role === MessageRole.ASSISTANT && onContinue}
 				<ActionIcon icon={ArrowRight} tooltip="Fortsätt" onclick={onContinue} />
+			{/if}
+
+			{#if role === MessageRole.ASSISTANT && onSaveAsText}
+				<ActionIcon icon={Download} tooltip="Spara som .txt" onclick={onSaveAsText} />
 			{/if}
 
 			<ActionIcon icon={Trash2} tooltip="Radera" onclick={onDelete} />

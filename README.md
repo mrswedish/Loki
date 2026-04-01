@@ -48,7 +48,6 @@ Loki är det perfekta verktyget för att bolla känsliga ämnen, effektivisera i
   | Modell | Storlek | RAM-krav | Fokus |
   | :--- | :--- | :--- | :--- |
   | **Gemma 3n E2B** | ~1.7 GB | 3 GB+ | Blixtsnabb & Effektiv |
-  | **Phi-4 Mini** | ~2.5 GB | 4 GB+ | Balanserad & Instruktionsstark |
   | **Ministral 3B** | ~2.3 GB | 5 GB+ | Kompakt Expert |
   | **Gemma 3n E4B** | ~3.5 GB | 6 GB+ | Analytisk & Längre texter |
   | **Ministral 8B** | ~5.6 GB | 10 GB+ | Allround & Kraftfull |

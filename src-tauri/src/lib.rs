@@ -39,7 +39,7 @@ async fn save_text_file(content: String, app: tauri::AppHandle) -> Result<String
 		.add_filter("Textfil", &["txt"])
 		.blocking_save_file()
 		.ok_or_else(|| "Ingen fil vald".to_string())?;
-	let path_str = path.to_string_lossy().to_string();
+	let path_str = path.to_string();
 	std::fs::write(&path_str, content.as_bytes())
 		.map_err(|e| format!("Skrivfel: {}", e))?;
 	Ok(path_str)

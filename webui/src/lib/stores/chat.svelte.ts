@@ -939,8 +939,8 @@ class ChatStore {
 	 *
 	 * Pipeline:
 	 *   Fas 0 (Regex): Replaces personnummer, email and phone numbers without any LLM.
-	 *   Fas 1 (Entity map): LLM scans chunk[0] to build a name→pseudonym entity map for
-	 *                       consistent replacement across the entire document.
+	 *   Fas 1 (Entity map): LLM scans ALL chunks to build a cumulative name→pseudonym map.
+	 *                       First occurrence wins – ensures consistent pseudonyms throughout.
 	 *   Fas 2 (Replace): Per-chunk LLM replacement using entity map + strict system prompt.
 	 *   Fas 3 (Output): Assembled result streamed to the user as a single message.
 	 */
@@ -961,10 +961,9 @@ class ChatStore {
 
 		const regexChunks = chunks.map(regexPass);
 
-		// ── Fas 1: Entitetsextraktion (bygg entity map från chunk[0]) ────────
-		this.setProcessingState(convId, mode);
-		this.setChatStreaming(convId, 'Identifierar personuppgifter...', assistantMessage.id);
-
+		// ── Fas 1: Entitetsextraktion (bygg entity map från ALLA chunks) ────
+		// Loopar alla chunks för full täckning. Första träff vinner – pseudonymer
+		// förblir konsekventa även om samma namn dyker upp i flera chunks.
 		const entityMap: Record<string, string> = {};
 		const entitySystemPrompt =
 			'Du är en GDPR-expert. Identifiera ALLA namn på personer, organisationer och platser i texten nedan.\n' +
@@ -972,24 +971,34 @@ class ChatStore {
 			'Exempel: {"Anna Svensson": "Person A", "Företaget AB": "Org 1"}\n' +
 			'Inkludera INGET annat i svaret – inget förklarande, inga radbrytningar utanför JSON.';
 
-		try {
-			const entityResult = await ChatService.sendMessage(
-				[
-					{ role: MessageRole.SYSTEM, content: entitySystemPrompt },
-					{ role: MessageRole.USER, content: regexChunks[0] }
-				],
-				{ stream: false, temperature: 0.0, max_tokens: 400 }
+		for (let i = 0; i < regexChunks.length; i++) {
+			this.setProcessingState(convId, makeChunkingState(i + 1, regexChunks.length, 'mapping', nCtx));
+			this.setChatStreaming(
+				convId,
+				`Kartlägger entiteter i del ${i + 1} av ${regexChunks.length}...`,
+				assistantMessage.id
 			);
-			const raw = (entityResult as string)?.trim() ?? '';
-			const jsonMatch = raw.match(/\{[\s\S]*\}/);
-			if (jsonMatch) {
-				const parsed = JSON.parse(jsonMatch[0]);
-				if (typeof parsed === 'object' && parsed !== null) {
-					Object.assign(entityMap, parsed);
+			try {
+				const entityResult = await ChatService.sendMessage(
+					[
+						{ role: MessageRole.SYSTEM, content: entitySystemPrompt },
+						{ role: MessageRole.USER, content: regexChunks[i] }
+					],
+					{ stream: false, temperature: 0.0, max_tokens: 600 }
+				);
+				const raw = (entityResult as string)?.trim() ?? '';
+				const jsonMatch = raw.match(/\{[\s\S]*\}/);
+				if (jsonMatch) {
+					const parsed = JSON.parse(jsonMatch[0]);
+					if (typeof parsed === 'object' && parsed !== null) {
+						for (const [key, value] of Object.entries(parsed)) {
+							if (!(key in entityMap)) entityMap[key] = value as string;
+						}
+					}
 				}
+			} catch {
+				// Extraktion misslyckades för denna chunk – fortsätter med nästa
 			}
-		} catch {
-			// Entity extraction failed – regex pre-pass still covers most PII
 		}
 
 		// Sort keys longest-first to avoid partial-match replacements

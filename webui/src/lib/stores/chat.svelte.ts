@@ -950,8 +950,6 @@ class ChatStore {
 		nCtx: number,
 		assistantMessage: DatabaseMessage
 	): Promise<void> {
-		const mode = makeChunkingState(1, chunks.length, 'mapping', nCtx);
-
 		// ── Fas 0: Regex pre-pass ────────────────────────────────────────────
 		const regexPass = (text: string): string =>
 			text

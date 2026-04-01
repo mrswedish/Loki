@@ -37,17 +37,15 @@ Loki är det perfekta verktyget för att bolla känsliga ämnen, effektivisera i
 ## Nyckelfunktioner
 
 * **100 % lokal AI** – All tankekraft genereras av din egen hårdvara, helt oberoende av molnet.
-* **Färdiga "smaker"** – Ett kurerat urval av optimerade modeller (GGUF) som laddas ner direkt i appen. Nu med den toppmoderna **Ministral-serien** (3B och 8B) från Mistral AI samt den kraftfulla **Qwen 3.5-serien**.
+* **Färdiga "smaker"** – Ett kurerat urval av optimerade modeller (GGUF) som laddas ner direkt i appen. Inkluderar modeller från Google, Microsoft och Mistral AI.
 * **Modeller som ingår (förval)**:
   | Modell | Storlek | RAM-krav | Fokus |
   | :--- | :--- | :--- | :--- |
   | **Gemma 3n E2B** | ~1.7 GB | 3 GB+ | Blixtsnabb & Effektiv |
-  | **Qwen 3.5 2B** | ~1.2 GB | 3 GB+ | Balanserad (Thinking) |
-  | **Ministral 3B** | ~2.3 GB | 4 GB+ | Kompakt Expert |
-  | **Ministral 8B** | ~5.6 GB | 8 GB+ | Allround & Kraftfull |
-  | **Qwen 3.5 4B** | ~2.6 GB | 6 GB+ | Analytisk Resonemang |
-  | **Qwen 3.5 9B** | ~5.3 GB | 10 GB+ | Tungviktare |
-  | **Qwen 2.5 Coder 7B**| ~4.4 GB | 8 GB+ | Kod & Logik |
+  | **Phi-4 Mini** | ~2.5 GB | 4 GB+ | Balanserad & Instruktionsstark |
+  | **Ministral 3B** | ~2.3 GB | 5 GB+ | Kompakt Expert |
+  | **Gemma 3n E4B** | ~3.5 GB | 6 GB+ | Analytisk & Längre texter |
+  | **Ministral 8B** | ~5.6 GB | 10 GB+ | Allround & Kraftfull |
 
 > [!TIP]
 > **Upplever du att en modell inte startar?** Om du har ett grafikkort med begränsat VRAM (t.ex. 6 GB), prova att sänka **Context Size** i inställningarna till 4096 eller 2048. Detta minskar minneskravet avsevärt vid start.

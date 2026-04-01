@@ -48,36 +48,14 @@ pub fn model_registry() -> Vec<ModelEntry> {
             is_default: true,
         },
         ModelEntry {
-            id: "qwen-3.5-2b-instruct".to_string(),
-            name: "Qwen 3.5 2B".to_string(),
-            filename: "Qwen3.5-2B-Q4_K_M.gguf".to_string(),
-            url: "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf?download=true".to_string(),
-            size_bytes: 1_280_835_840,
-            description: "Qwen 3.5 2B Instruct – balanserad med kraftfullt resonemang (Thinking), Q4 (~1.2 GB)".to_string(),
+            id: "phi-4-mini".to_string(),
+            name: "Phi-4 Mini".to_string(),
+            filename: "Phi-4-mini-instruct-Q4_K_M.gguf".to_string(),
+            url: "https://huggingface.co/bartowski/Phi-4-mini-instruct-GGUF/resolve/main/Phi-4-mini-instruct-Q4_K_M.gguf".to_string(),
+            size_bytes: 2_500_000_000,
+            description: "Microsoft Phi-4 Mini – stark på instruktioner och svenska texter, Q4 (~2.5 GB)".to_string(),
             flavor: "Smidig".to_string(),
-            ram_required_gb: 3.0,
-            is_default: false,
-        },
-        ModelEntry {
-            id: "qwen-3.5-4b-instruct".to_string(),
-            name: "Qwen 3.5 4B".to_string(),
-            filename: "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
-            url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf?download=true".to_string(),
-            size_bytes: 2_740_937_888,
-            description: "Qwen 3.5 4B Instruct – smart analytiskt resonemang, kräver mer RAM, Q4 (~2.6 GB)".to_string(),
-            flavor: "Analytisk".to_string(),
-            ram_required_gb: 6.0,
-            is_default: false,
-        },
-        ModelEntry {
-            id: "qwen-3.5-9b-instruct".to_string(),
-            name: "Qwen 3.5 9B".to_string(),
-            filename: "Qwen3.5-9B-Q4_K_M.gguf".to_string(),
-            url: "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf?download=true".to_string(),
-            size_bytes: 5_680_522_464,
-            description: "Qwen 3.5 9B Instruct – tungviktare, kräver modern dator med mycket RAM, Q4 (~5.3 GB)".to_string(),
-            flavor: "Kraftfull".to_string(),
-            ram_required_gb: 10.0,
+            ram_required_gb: 4.0,
             is_default: false,
         },
         ModelEntry {
@@ -92,6 +70,17 @@ pub fn model_registry() -> Vec<ModelEntry> {
             is_default: false,
         },
         ModelEntry {
+            id: "gemma-3n-e4b".to_string(),
+            name: "Gemma 3n E4B".to_string(),
+            filename: "google_gemma-3n-E4B-it-Q4_K_M.gguf".to_string(),
+            url: "https://huggingface.co/bartowski/google_gemma-3n-E4B-it-GGUF/resolve/main/google_gemma-3n-E4B-it-Q4_K_M.gguf".to_string(),
+            size_bytes: 3_500_000_000,
+            description: "Google Gemma 3n E4B – kraftfullare syskon till E2B, bättre på längre texter, Q4 (~3.5 GB)".to_string(),
+            flavor: "Analytisk".to_string(),
+            ram_required_gb: 6.0,
+            is_default: false,
+        },
+        ModelEntry {
             id: "ministral-8b".to_string(),
             name: "Ministral 8B".to_string(),
             filename: "Ministral-3-8B-Instruct-2512-Q5_K_M.gguf".to_string(),
@@ -100,17 +89,6 @@ pub fn model_registry() -> Vec<ModelEntry> {
             description: "Ministral 8B Instruct 2512 – efterföljaren till Mistral 7B. Kräver sänkt kontext vid < 8GB VRAM. Q5 (~5.6 GB)".to_string(),
             flavor: "Balanserad".to_string(),
             ram_required_gb: 10.0,
-            is_default: false,
-        },
-        ModelEntry {
-            id: "qwen-2.5-coder-7b".to_string(),
-            name: "Qwen 2.5 Coder 7B".to_string(),
-            filename: "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf".to_string(),
-            url: "https://huggingface.co/unsloth/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf?download=true".to_string(),
-            size_bytes: 4_683_073_504,
-            description: "Qwen 2.5 Coder 7B – fokus på kod/logik, kräver mycket RAM, Q4 (~4.4 GB)".to_string(),
-            flavor: "Logik".to_string(),
-            ram_required_gb: 8.0,
             is_default: false,
         },
     ]
@@ -227,4 +205,31 @@ pub async fn download_model(model_id: String, app: AppHandle) -> Result<String, 
     let _ = app.emit("download-complete", model_id.clone());
 
     Ok(dest.to_string_lossy().to_string())
+}
+
+/// Tar bort .gguf-filer i models-katalogen som inte längre finns i model_registry().
+/// Körs vid appstart för att rensa bort gamla modeller efter en registerbyte.
+pub fn cleanup_unknown_models(app: &tauri::AppHandle) {
+    let known: std::collections::HashSet<String> = model_registry()
+        .into_iter()
+        .map(|e| e.filename)
+        .collect();
+
+    let models_dir = crate::get_app_dir(app).join("models");
+    let Ok(entries) = std::fs::read_dir(&models_dir) else { return };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().map_or(false, |e| e == "gguf") {
+            let filename = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            if !known.contains(&filename) {
+                eprintln!("[cleanup] Tar bort okänd modell: {filename}");
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
 }

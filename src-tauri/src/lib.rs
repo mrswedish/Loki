@@ -210,6 +210,7 @@ pub fn run() {
 		.plugin(tauri_plugin_opener::init())
 		.setup(|app| {
 			ensure_dirs(app.handle());
+			model_download::cleanup_unknown_models(app.handle());
 			Ok(())
 		})
 		.manage(engine.clone())

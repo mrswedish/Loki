@@ -71,7 +71,7 @@
 
 		if (isCtrlOrCmd && event.shiftKey && event.key === KeyboardKey.O_UPPER) {
 			event.preventDefault();
-			goto('?new_chat=true#/');
+			goto('/?new_chat=true');
 		}
 
 		if (event.shiftKey && isCtrlOrCmd && event.key === KeyboardKey.E_UPPER) {

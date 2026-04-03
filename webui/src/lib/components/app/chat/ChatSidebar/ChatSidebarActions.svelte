@@ -60,7 +60,7 @@
 				handleMobileSidebarItemClick();
 				conversationsStore.clearActiveConversation();
 				chatStore.clearUIState();
-				await goto('#/');
+				await goto('/');
 			}}
 			variant="ghost"
 		>

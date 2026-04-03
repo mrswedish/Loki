@@ -202,7 +202,7 @@ class ConversationsStore {
 		this.activeConversation = conversation;
 		this.activeMessages = [];
 
-		await goto(`#/chat/${conversation.id}`);
+		await goto(`/chat/${conversation.id}`);
 
 		return conversation.id;
 	}
@@ -263,7 +263,7 @@ class ConversationsStore {
 
 			if (this.activeConversation?.id === convId) {
 				this.clearActiveConversation();
-				await goto(`?new_chat=true#/`);
+				await goto(`/?new_chat=true`);
 			}
 		} catch (error) {
 			console.error('Failed to delete conversation:', error);
@@ -286,7 +286,7 @@ class ConversationsStore {
 
 			toast.success('All conversations deleted');
 
-			await goto(`?new_chat=true#/`);
+			await goto(`/?new_chat=true`);
 		} catch (error) {
 			console.error('Failed to delete all conversations:', error);
 			toast.error('Failed to delete conversations');

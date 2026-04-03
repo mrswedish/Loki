@@ -145,9 +145,6 @@ class ChatStore {
 	private isEditModeActive = $state(false);
 	private addFilesHandler: ((files: File[]) => void) | null = $state(null);
 	pendingEditMessageId = $state<string | null>(null);
-	private messageUpdateCallback:
-		| ((messageId: string, updates: Partial<DatabaseMessage>) => void)
-		| null = null;
 	private _pendingDraftMessage = $state<string>('');
 	private _pendingDraftFiles = $state<ChatUploadedFile[]>([]);
 
@@ -730,10 +727,16 @@ class ChatStore {
 				`Kopiera dem ordagrant – komprimera inte. ` +
 				`Om inget är relevant, svara bara: [irrelevant]`;
 
-			const result = await ChatService.sendMessage(
-				[{ role: MessageRole.USER, content: prompt }],
-				{ stream: false, temperature: 0.0 }
-			);
+			let result: string | void;
+			try {
+				result = await ChatService.sendMessage(
+					[{ role: MessageRole.USER, content: prompt }],
+					{ stream: false, temperature: 1.0, top_p: 0.95, top_k: 64 }
+				);
+			} catch (e) {
+				console.warn(`[chatStore] Extrahering av del ${i + 1} misslyckades, hoppar över:`, e);
+				continue;
+			}
 
 			const trimmed = (result as string)?.trim() ?? '';
 			if (trimmed && !trimmed.toLowerCase().startsWith('[irrelevant]') && trimmed.length > 30) {
@@ -767,61 +770,6 @@ class ChatStore {
 			`3. Agera som om du har läst hela dokumentet.\n\n` +
 			`Användarens fråga: "${instruction}"\n\n` +
 			`Relevanta utdrag:\n${fittedExtracts.join('\n\n---\n\n')}`;
-
-		await this.streamChatCompletion([makeTempMessage(finalPrompt, assistantMessage)], assistantMessage);
-	}
-
-	/**
-	 * Progressive mode – for summarization requests.
-	 * Maintains a rolling summary across all chunks. The last chunk triggers
-	 * a streamed final answer so the user sees output in real time.
-	 */
-	private async handleProgressiveSummarization(
-		convId: string,
-		instruction: string,
-		chunks: string[],
-		nCtx: number,
-		assistantMessage: DatabaseMessage,
-		mode: 'extract' | 'summarize' = 'summarize'
-	): Promise<void> {
-		let runningSummary = '';
-
-		// All chunks except the last: build rolling summary non-streaming
-		for (let i = 0; i < chunks.length - 1; i++) {
-			this.setProcessingState(convId, makeChunkingState(i + 1, chunks.length, 'mapping', nCtx, mode));
-			this.setChatStreaming(convId, `Läser del ${i + 1} av ${chunks.length}...`, assistantMessage.id);
-
-			const contextHint = runningSummary
-				? `\n\nLöpande sammanfattning hittills:\n${runningSummary}\n`
-				: '';
-
-			const prompt =
-				`Du läser ett dokument del för del.${contextHint}\n\n` +
-				`Nästa del:\n${chunks[i]}\n\n` +
-				`Uppdatera den löpande sammanfattningen med viktig information från denna del. ` +
-				`Var kompakt men behåll alla viktiga fakta, namn, datum och detaljer.`;
-
-			const updated = await ChatService.sendMessage(
-				[{ role: MessageRole.USER, content: prompt }],
-				{ stream: false, temperature: 0.0 }
-			);
-			if (updated) runningSummary = updated as string;
-		}
-
-		// Last chunk: stream the final answer directly to the user
-		this.setProcessingState(convId, makeChunkingState(chunks.length, chunks.length, 'reducing', nCtx, mode));
-		this.setChatStreaming(convId, 'Formulerar slutsvar...', assistantMessage.id);
-
-		const contextHint = runningSummary
-			? `\n\nSammanfattning av tidigare delar:\n${runningSummary}\n`
-			: '';
-
-		const finalPrompt =
-			`Du är Loki, en hjälpsam AI-assistent. Du har läst ett dokument del för del.${contextHint}\n\n` +
-			`Sista delen:\n${chunks[chunks.length - 1]}\n\n` +
-			`Användarens önskemål: "${instruction}"\n\n` +
-			`Ge nu ett komplett och välstrukturerat svar baserat på hela dokumentet. ` +
-			`Nämn INTE att dokumentet var uppdelat eller att du bearbetat det i delar.`;
 
 		await this.streamChatCompletion([makeTempMessage(finalPrompt, assistantMessage)], assistantMessage);
 	}
@@ -887,10 +835,16 @@ class ChatStore {
 				`• Uteslut upprepningar och utfyllnad.\n` +
 				`• Skriv på svenska. Svara ENBART med bullet points – ingen inledning eller avslutning.`;
 
-			const result = await ChatService.sendMessage(
-				[{ role: MessageRole.USER, content: mapPrompt }],
-				{ stream: false, temperature: 0.0, max_tokens: mapMaxTokens }
-			);
+			let result: string | void;
+			try {
+				result = await ChatService.sendMessage(
+					[{ role: MessageRole.USER, content: mapPrompt }],
+					{ stream: false, temperature: 0.0, max_tokens: mapMaxTokens }
+				);
+			} catch (e) {
+				console.warn(`[chatStore] Sammanfattning av del ${i + 1} misslyckades, hoppar över:`, e);
+				continue;
+			}
 			const trimmed = (result as string)?.trim() ?? '';
 			if (trimmed.length > 0) chunkSummaries.push(trimmed);
 		}
@@ -1041,7 +995,7 @@ class ChatStore {
 					{ role: MessageRole.SYSTEM, content: anonSystemPrompt },
 					{ role: MessageRole.USER, content: chunkWithEntities }
 				],
-				{ stream: false, temperature: 0.0 }
+				{ stream: false, temperature: 1.0, top_p: 0.95, top_k: 64 }
 			);
 
 			const trimmed = stripPreamble((result as string)?.trim() ?? '');

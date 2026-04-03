@@ -527,6 +527,10 @@ export class ChatService {
 		let modelEmitted = false;
 		let toolCallIndexOffset = 0;
 		let hasOpenToolCallBatch = false;
+		// Gemma 4 thinking token state machine
+		let gemmaThoughtState: 'normal' | 'in-thought' = 'normal';
+		const GEMMA_THOUGHT_START = '<|channel>thought\n';
+		const GEMMA_THOUGHT_END = '<channel|>';
 
 		const finalizeOpenToolCallBatch = () => {
 			if (!hasOpenToolCallBatch) {
@@ -619,9 +623,40 @@ export class ChatService {
 
 							if (content) {
 								finalizeOpenToolCallBatch();
-								aggregatedContent += content;
-								if (!abortSignal?.aborted) {
-									onChunk?.(content);
+								// Route Gemma 4 thinking tokens to onReasoningChunk
+								let remaining = content;
+								while (remaining.length > 0) {
+									if (gemmaThoughtState === 'normal') {
+										const startIdx = remaining.indexOf(GEMMA_THOUGHT_START);
+										if (startIdx === -1) {
+											aggregatedContent += remaining;
+											if (!abortSignal?.aborted) onChunk?.(remaining);
+											remaining = '';
+										} else {
+											if (startIdx > 0) {
+												const pre = remaining.slice(0, startIdx);
+												aggregatedContent += pre;
+												if (!abortSignal?.aborted) onChunk?.(pre);
+											}
+											gemmaThoughtState = 'in-thought';
+											remaining = remaining.slice(startIdx + GEMMA_THOUGHT_START.length);
+										}
+									} else {
+										const endIdx = remaining.indexOf(GEMMA_THOUGHT_END);
+										if (endIdx === -1) {
+											fullReasoningContent += remaining;
+											if (!abortSignal?.aborted) onReasoningChunk?.(remaining);
+											remaining = '';
+										} else {
+											const reasoning = remaining.slice(0, endIdx);
+											if (reasoning) {
+												fullReasoningContent += reasoning;
+												if (!abortSignal?.aborted) onReasoningChunk?.(reasoning);
+											}
+											gemmaThoughtState = 'normal';
+											remaining = remaining.slice(endIdx + GEMMA_THOUGHT_END.length);
+										}
+									}
 								}
 							}
 

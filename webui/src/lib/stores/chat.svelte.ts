@@ -64,8 +64,6 @@ function detectIntent(instruction: string): 'summarize' | 'question' {
 	return summarizePatterns.some((p) => lower.includes(p)) ? 'summarize' : 'question';
 }
 
-export type DocumentMode = 'auto' | 'summarize' | 'extract' | 'anonymize';
-
 /** Returns a fully-populated chunking processing state object. */
 function makeChunkingState(
 	current: number,
@@ -130,11 +128,6 @@ class ChatStore {
 	currentResponse = $state('');
 	errorDialogState = $state<ErrorDialogState | null>(null);
 	isLoading = $state(false);
-	documentMode = $state<DocumentMode>('auto');
-
-	setDocumentMode(mode: DocumentMode): void {
-		this.documentMode = mode;
-	}
 	chatLoadingStates = new SvelteMap<string, boolean>();
 	chatStreamingStates = new SvelteMap<string, { response: string; messageId: string }>();
 	private abortControllers = new SvelteMap<string, AbortController>();
@@ -581,19 +574,6 @@ class ChatStore {
 			const tokens = await ChatService.tokenize(totalText);
 			const safetyMargin = 1000; // Leave room for instructions/generation
 
-			// Anonymize mode always uses the pipeline when file extras are present
-			const hasFileContent = allExtras?.some((e) => 'content' in e && e.content);
-			if (this.documentMode === 'anonymize' && hasFileContent) {
-				await this.handleMappedMessage(
-					currentConv.id,
-					content,
-					allExtras,
-					parentIdForUserMessage,
-					currentNctx
-				);
-				return;
-			}
-
 			if (tokens.length > currentNctx - safetyMargin && totalText.length > 1000) {
 				console.info(
 					`[chatStore] Context overflow detected (${tokens.length} tokens). Triggering Map-Reduce.`
@@ -660,15 +640,10 @@ class ChatStore {
 	): Promise<void> {
 		const rawText = extras?.map((e) => ('content' in e ? e.content : '')).join('\n\n') || '';
 
-		// Resolve mode: explicit override beats auto-detection
-		const resolvedMode: 'extract' | 'summarize' | 'anonymize' =
-			this.documentMode === 'anonymize' ? 'anonymize'
-			: this.documentMode === 'extract' ? 'extract'
-			: this.documentMode === 'summarize' ? 'summarize'
-			: detectIntent(instruction) === 'summarize' ? 'summarize' : 'extract';
+		const resolvedMode: 'extract' | 'summarize' =
+			detectIntent(instruction) === 'summarize' ? 'summarize' : 'extract';
 
-		// Anonymize skips IDF pre-filter to preserve all text for full PII coverage
-		const totalText = resolvedMode === 'anonymize' ? rawText : ChatService.prefilterText(rawText);
+		const totalText = ChatService.prefilterText(rawText);
 
 		// Token-based chunk sizing: extract mode gets up to 2× the summarize budget.
 		const { chunkInputTokens } = calculateChunkTokenBudget(nCtx);
@@ -688,9 +663,7 @@ class ChatStore {
 		const assistantMessage = await this.createAssistantMessage(userMessage.id);
 		conversationsStore.addMessageToActive(assistantMessage);
 
-		if (resolvedMode === 'anonymize') {
-			await this.handleAnonymizeMode(convId, chunks, nCtx, assistantMessage);
-		} else if (resolvedMode === 'summarize') {
+		if (resolvedMode === 'summarize') {
 			await this.handleIndependentMapSummarize(convId, instruction, chunks, nCtx, assistantMessage, resolvedMode);
 		} else {
 			await this.handleExtractionMode(convId, instruction, chunks, nCtx, assistantMessage, resolvedMode);
@@ -886,137 +859,6 @@ class ChatStore {
 			`Användarens önskemål: "${instruction}"`;
 
 		await this.streamChatCompletion([makeTempMessage(synthesisPrompt, assistantMessage)], assistantMessage);
-	}
-
-	/**
-	 * Anonymize mode – GDPR-safe PII removal.
-	 *
-	 * Pipeline:
-	 *   Fas 0 (Regex): Replaces personnummer, email and phone numbers without any LLM.
-	 *   Fas 1 (Entity map): LLM scans ALL chunks to build a cumulative name→pseudonym map.
-	 *                       First occurrence wins – ensures consistent pseudonyms throughout.
-	 *   Fas 2 (Replace): Per-chunk LLM replacement using entity map + strict system prompt.
-	 *   Fas 3 (Output): Assembled result streamed to the user as a single message.
-	 */
-	private async handleAnonymizeMode(
-		convId: string,
-		chunks: string[],
-		nCtx: number,
-		assistantMessage: DatabaseMessage
-	): Promise<void> {
-		// ── Fas 0: Regex pre-pass ────────────────────────────────────────────
-		const regexPass = (text: string): string =>
-			text
-				.replace(/\b\d{6,8}[-+]\d{4}\b/g, '[PERSONNUMMER]')
-				.replace(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g, '[EPOST]')
-				.replace(/\b(0\d[\d\s\-]{6,11}|\+46[\d\s\-]{6,12})\b/g, '[TELEFON]');
-
-		const regexChunks = chunks.map(regexPass);
-
-		// ── Fas 1: Entitetsextraktion (bygg entity map från ALLA chunks) ────
-		// Loopar alla chunks för full täckning. Första träff vinner – pseudonymer
-		// förblir konsekventa även om samma namn dyker upp i flera chunks.
-		const entityMap: Record<string, string> = {};
-		const entitySystemPrompt =
-			'Du är en GDPR-expert. Identifiera ALLA namn på personer, organisationer och platser i texten nedan.\n' +
-			'Svara ENDAST med ett JSON-objekt där varje nyckel är originaltexten och värdet är en pseudonym.\n' +
-			'Exempel: {"Anna Svensson": "Person A", "Företaget AB": "Org 1"}\n' +
-			'Inkludera INGET annat i svaret – inget förklarande, inga radbrytningar utanför JSON.';
-
-		for (let i = 0; i < regexChunks.length; i++) {
-			this.setProcessingState(convId, makeChunkingState(i + 1, regexChunks.length, 'mapping', nCtx));
-			this.setChatStreaming(
-				convId,
-				`Kartlägger entiteter i del ${i + 1} av ${regexChunks.length}...`,
-				assistantMessage.id
-			);
-			try {
-				const entityResult = await ChatService.sendMessage(
-					[
-						{ role: MessageRole.SYSTEM, content: entitySystemPrompt },
-						{ role: MessageRole.USER, content: regexChunks[i] }
-					],
-					{ stream: false, temperature: 0.0, max_tokens: 600 }
-				);
-				const raw = (entityResult as string)?.trim() ?? '';
-				const jsonMatch = raw.match(/\{[\s\S]*\}/);
-				if (jsonMatch) {
-					const parsed = JSON.parse(jsonMatch[0]);
-					if (typeof parsed === 'object' && parsed !== null) {
-						for (const [key, value] of Object.entries(parsed)) {
-							if (!(key in entityMap)) entityMap[key] = value as string;
-						}
-					}
-				}
-			} catch {
-				// Extraktion misslyckades för denna chunk – fortsätter med nästa
-			}
-		}
-
-		// Sort keys longest-first to avoid partial-match replacements
-		const sortedEntities = Object.entries(entityMap).sort(([a], [b]) => b.length - a.length);
-
-		const applyEntityMap = (text: string): string => {
-			let result = text;
-			for (const [original, pseudonym] of sortedEntities) {
-				result = result.replaceAll(original, pseudonym);
-			}
-			return result;
-		};
-
-		// ── Fas 2: Per-chunk anonymisering ────────────────────────────────────
-		const anonSystemPrompt =
-			'Du är ett GDPR-anonymiseringsverktyg. Din uppgift är att returnera texten nedan med alla personuppgifter ersatta.\n' +
-			'REGLER:\n' +
-			'- Behåll all annan text exakt som den är – inga omskrivningar, inga förkortningar\n' +
-			'- Ersätt kvarvarande personnamn med [PERSON], organisationer med [ORG], adresser med [ADRESS]\n' +
-			'- Svara ENBART med den anonymiserade texten – inga inledande fraser, inga förklaringar';
-
-		const stripPreamble = (text: string): string =>
-			text.replace(
-				/^(Här är|Självklart|Absolut|Nedan följer|Den anonymiserade|Anonymiserad)[^:\n]*:?\s*/i,
-				''
-			);
-
-		const anonymizedChunks: string[] = [];
-
-		for (let i = 0; i < regexChunks.length; i++) {
-			this.setProcessingState(convId, makeChunkingState(i + 1, regexChunks.length, 'mapping', nCtx));
-			this.setChatStreaming(
-				convId,
-				`Anonymiserar del ${i + 1} av ${regexChunks.length}...`,
-				assistantMessage.id
-			);
-
-			const chunkWithEntities = applyEntityMap(regexChunks[i]);
-
-			const result = await ChatService.sendMessage(
-				[
-					{ role: MessageRole.SYSTEM, content: anonSystemPrompt },
-					{ role: MessageRole.USER, content: chunkWithEntities }
-				],
-				{ stream: false, temperature: 1.0, top_p: 0.95, top_k: 64 }
-			);
-
-			const trimmed = stripPreamble((result as string)?.trim() ?? '');
-			anonymizedChunks.push(trimmed);
-		}
-
-		// ── Fas 3: Sammanställ och spara direkt – ingen extra LLM-körning ──────
-		// Anonymized text is final – skip re-processing to avoid unintended modifications.
-		const combined = anonymizedChunks.join('\n\n');
-
-		this.setProcessingState(convId, makeChunkingState(1, 1, 'reducing', nCtx));
-		this.setChatStreaming(convId, combined, assistantMessage.id);
-
-		await DatabaseService.updateMessage(assistantMessage.id, { content: combined });
-		const msgIdx = conversationsStore.findMessageIndex(assistantMessage.id);
-		conversationsStore.updateMessageAtIndex(msgIdx, { content: combined });
-		await conversationsStore.updateCurrentNode(assistantMessage.id);
-
-		this.setChatLoading(convId, false);
-		this.clearChatStreaming(convId);
-		this.clearProcessingState(convId);
 	}
 
 	/**

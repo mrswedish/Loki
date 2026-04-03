@@ -6,7 +6,6 @@
 		ChatFormActionAttachmentsSheet,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
-		ChatFormDocumentModeChip,
 		McpServersSelector,
 		ModelsSelector,
 		ModelsSelectorSheet
@@ -227,10 +226,6 @@
 			onSettingsClick={() => (showChatSettingsDialogWithMcpSection = true)}
 		/>
 	</div>
-
-	{#if hasDocumentAttachments}
-		<ChatFormDocumentModeChip />
-	{/if}
 
 	<div class="ml-auto flex items-center gap-1.5">
 		{#if isMobile.current}

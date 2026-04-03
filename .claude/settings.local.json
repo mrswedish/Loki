@@ -19,7 +19,25 @@
       "Bash(powershell -Command \"Get-Process | Where-Object {$_Name -eq ''loke'' -or $_Name -eq ''node''} | Stop-Process -Force -ErrorAction SilentlyContinue; Write-Output ''All killed''\")",
       "Bash(powershell.exe -Command \"Stop-Process -Name loke -Force -ErrorAction Ignore; Stop-Process -Name ''loke-lib'' -Force -ErrorAction Ignore\")",
       "Bash(powershell.exe -Command \"Get-Process loke -ErrorAction SilentlyContinue | Select-Object Name,Id,CPU\")",
-      "Bash(powershell.exe -Command \"Get-Process loke -ErrorAction SilentlyContinue | Select-Object Id, StartTime, CPU\")"
+      "Bash(powershell.exe -Command \"Get-Process loke -ErrorAction SilentlyContinue | Select-Object Id, StartTime, CPU\")",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git tag:*)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(gh run:*)",
+      "Bash(curl -s \"https://api.github.com/repos/mrswedish/Loki/actions/runs?per_page=3\")",
+      "Bash(python3 -c \"import sys,json; runs=json.load\\(sys.stdin\\)[''''workflow_runs'''']; [print\\(r[''''status''''], r[''''name''''], r[''''display_title'''']\\) for r in runs]\")",
+      "Bash(du -sh /Users/patriksvensk/Antigravity/Loki/dist/_app/immutable/*)",
+      "Bash(npm run:*)",
+      "Bash(curl -s \"https://api.github.com/repos/mrswedish/Loki/actions/runs?per_page=2\")",
+      "Bash(python3 -c \"import sys,json; runs=json.load\\(sys.stdin\\)[''''workflow_runs'''']; [print\\(r[''''status''''], r[''''display_title'''']\\) for r in runs]\")",
+      "Bash(npx svelte-kit:*)",
+      "Bash(npx svelte-check:*)",
+      "Bash(sed -i '' 's/\"\"version\"\": \"\"0.1.70\"\"/\"\"version\"\": \"\"0.1.71\"\"/' package.json webui/package.json src-tauri/tauri.conf.json)",
+      "Bash(sed -i '' 's/^version = \"\"0.1.70\"\"/version = \"\"0.1.71\"\"/' src-tauri/Cargo.toml)",
+      "Bash(sed -i '' 's/\"\"version\"\": \"\"0.1.71\"\"/\"\"version\"\": \"\"0.1.72\"\"/' package.json webui/package.json src-tauri/tauri.conf.json)",
+      "Bash(sed -i '' 's/^version = \"\"0.1.71\"\"/version = \"\"0.1.72\"\"/' src-tauri/Cargo.toml)"
     ]
   }
 }

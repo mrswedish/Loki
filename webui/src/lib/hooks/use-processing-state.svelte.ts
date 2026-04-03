@@ -106,16 +106,6 @@ export function useProcessingState(): UseProcessingStateReturn {
 		switch (processingState.status) {
 			case 'initializing':
 				return 'Initializing...';
-			case 'chunking':
-				if (processingState.chunking) {
-					const { current, total, phase, mode } = processingState.chunking;
-					const phaseText =
-						phase === 'mapping'
-							? mode === 'extract' ? 'Extraherar' : 'Läser'
-							: 'Sammanställer';
-					return `${phaseText} del ${current} av ${total}...`;
-				}
-				return 'Bearbetar i bitar...';
 			case 'preparing':
 				if (processingState.progressPercent !== undefined) {
 					return `Processing (${processingState.progressPercent}%)`;
@@ -136,18 +126,6 @@ export function useProcessingState(): UseProcessingStateReturn {
 		}
 
 		const details: string[] = [];
-
-		if (stateToUse.status === 'chunking' && stateToUse.chunking) {
-			const { current, total, phase, mode } = stateToUse.chunking;
-			const modeLabel =
-				mode === 'extract' ? '🔍 Extraktionsläge' :
-				mode === 'summarize' ? '📄 Sammanfattningsläge' :
-				'⚙️ Dokumentanalys';
-			const phaseLabel = phase === 'mapping' ? 'Analyserar' : 'Sammanställer';
-			details.push(modeLabel);
-			details.push(`${phaseLabel} del ${current}/${total}`);
-			return details;
-		}
 
 		// Show prompt processing progress with ETA during preparation phase
 		if (stateToUse.promptProgress) {

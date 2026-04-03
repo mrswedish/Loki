@@ -351,7 +351,7 @@ export interface ApiSlotData {
 }
 
 export interface ApiProcessingState {
-	status: 'initializing' | 'generating' | 'preparing' | 'idle' | 'chunking';
+	status: 'initializing' | 'generating' | 'preparing' | 'idle';
 	tokensDecoded: number;
 	tokensRemaining: number;
 	contextUsed: number;
@@ -369,12 +369,6 @@ export interface ApiProcessingState {
 	promptTokens?: number;
 	promptMs?: number;
 	cacheTokens?: number;
-	chunking?: {
-		current: number;
-		total: number;
-		phase: 'mapping' | 'reducing';
-		mode?: 'extract' | 'summarize';
-	};
 }
 
 /**

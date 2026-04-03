@@ -64,9 +64,6 @@ export {
 	isFileTypeSupported
 } from './file-type';
 
-// Text scoring utilities
-export { extractKeySentenceText } from './text-scoring';
-
 // Formatting utilities
 export {
 	formatFileSize,

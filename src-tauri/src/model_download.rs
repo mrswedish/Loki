@@ -37,14 +37,14 @@ pub struct DownloadProgress {
 pub fn model_registry() -> Vec<ModelEntry> {
     vec![
         ModelEntry {
-            id: "gemma-3n-e2b".to_string(),
-            name: "Gemma 3n E2B".to_string(),
-            filename: "google_gemma-3n-E2B-it-Q4_K_M.gguf".to_string(),
-            url: "https://huggingface.co/bartowski/google_gemma-3n-E2B-it-GGUF/resolve/main/google_gemma-3n-E2B-it-Q4_K_M.gguf".to_string(),
-            size_bytes: 1_850_000_000,
-            description: "Google Gemma 3n E2B – blixtsnabb och effektiv, Q4 (~1.7 GB)".to_string(),
+            id: "gemma-4-e2b".to_string(),
+            name: "Gemma 4 E2B".to_string(),
+            filename: "google_gemma-4-E2B-it-Q4_K_M.gguf".to_string(),
+            url: "https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF/resolve/main/google_gemma-4-E2B-it-Q4_K_M.gguf".to_string(),
+            size_bytes: 3_460_000_000,
+            description: "Google Gemma 4 E2B – blixtsnabb och effektiv, multimodal, 256K kontext, Q4 (~3.5 GB)".to_string(),
             flavor: "Kompakt".to_string(),
-            ram_required_gb: 3.0,
+            ram_required_gb: 5.0,
             is_default: true,
         },
         ModelEntry {
@@ -59,14 +59,14 @@ pub fn model_registry() -> Vec<ModelEntry> {
             is_default: false,
         },
         ModelEntry {
-            id: "gemma-3n-e4b".to_string(),
-            name: "Gemma 3n E4B".to_string(),
-            filename: "google_gemma-3n-E4B-it-Q4_K_M.gguf".to_string(),
-            url: "https://huggingface.co/bartowski/google_gemma-3n-E4B-it-GGUF/resolve/main/google_gemma-3n-E4B-it-Q4_K_M.gguf".to_string(),
-            size_bytes: 3_500_000_000,
-            description: "Google Gemma 3n E4B – kraftfullare syskon till E2B, bättre på längre texter, Q4 (~3.5 GB)".to_string(),
+            id: "gemma-4-e4b".to_string(),
+            name: "Gemma 4 E4B".to_string(),
+            filename: "google_gemma-4-E4B-it-Q4_K_M.gguf".to_string(),
+            url: "https://huggingface.co/bartowski/google_gemma-4-E4B-it-GGUF/resolve/main/google_gemma-4-E4B-it-Q4_K_M.gguf".to_string(),
+            size_bytes: 6_900_000_000,
+            description: "Google Gemma 4 E4B – kraftfullare syskon till E2B, multimodal, 256K kontext, Q4 (~6.9 GB)".to_string(),
             flavor: "Analytisk".to_string(),
-            ram_required_gb: 6.0,
+            ram_required_gb: 9.0,
             is_default: false,
         },
         ModelEntry {

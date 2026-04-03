@@ -25,8 +25,8 @@ export interface SettingsChatServiceOptions {
 	model?: string;
 	// System message to inject
 	systemMessage?: string;
-	// Disable reasoning parsing (use 'none' instead of 'auto')
-	disableReasoningParsing?: boolean;
+	// Enable thinking/reasoning mode
+	enableThinking?: boolean;
 	tools?: OpenAIToolDefinition[];
 	// Generation parameters
 	temperature?: number;

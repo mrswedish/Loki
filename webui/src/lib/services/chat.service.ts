@@ -283,7 +283,7 @@ export class ChatService {
 			custom,
 			timings_per_token,
 			// Config options
-			disableReasoningParsing
+			enableThinking
 		} = options;
 
 		const normalizedMessages: ApiChatMessageData[] = messages
@@ -349,7 +349,7 @@ export class ChatService {
 			requestBody.model = options.model;
 		}
 
-		requestBody.reasoning_format = disableReasoningParsing
+		requestBody.reasoning_format = enableThinking === false
 			? ReasoningFormat.NONE
 			: ReasoningFormat.AUTO;
 
@@ -426,7 +426,8 @@ export class ChatService {
 					onModel,
 					onTimings,
 					conversationId,
-					signal
+					signal,
+					enableThinking
 				);
 
 				return;
@@ -510,7 +511,8 @@ export class ChatService {
 		onModel?: (model: string) => void,
 		onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void,
 		conversationId?: string,
-		abortSignal?: AbortSignal
+		abortSignal?: AbortSignal,
+		enableThinking?: boolean
 	): Promise<void> {
 		const reader = response.body?.getReader();
 
@@ -644,12 +646,14 @@ export class ChatService {
 									} else {
 										const endIdx = remaining.indexOf(GEMMA_THOUGHT_END);
 										if (endIdx === -1) {
-											fullReasoningContent += remaining;
-											if (!abortSignal?.aborted) onReasoningChunk?.(remaining);
+											if (enableThinking !== false) {
+												fullReasoningContent += remaining;
+												if (!abortSignal?.aborted) onReasoningChunk?.(remaining);
+											}
 											remaining = '';
 										} else {
 											const reasoning = remaining.slice(0, endIdx);
-											if (reasoning) {
+											if (reasoning && enableThinking !== false) {
 												fullReasoningContent += reasoning;
 												if (!abortSignal?.aborted) onReasoningChunk?.(reasoning);
 											}

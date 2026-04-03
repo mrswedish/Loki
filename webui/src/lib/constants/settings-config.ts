@@ -9,7 +9,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	showSystemMessage: true,
 	theme: ColorMode.SYSTEM,
 	showThoughtInProgress: false,
-	disableReasoningParsing: false,
+	enableThinking: true,
 	showRawOutputSwitch: false,
 	keepStatsVisible: false,
 	showMessageStats: true,
@@ -104,8 +104,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	max_tokens: 'The maximum number of token per output. Use -1 for infinite (no limit).',
 	custom: 'Custom JSON parameters to send to the API. Must be valid JSON format.',
 	showThoughtInProgress: 'Expand thought process by default when generating messages.',
-	disableReasoningParsing:
-		'Send reasoning_format=none to prevent server-side extraction of reasoning tokens into separate field',
+	enableThinking:
+		'Modellen tänker igenom svaret innan den svarar. Ger bättre kvalitet men tar längre tid.',
 	showRawOutputSwitch:
 		'Show toggle button to display messages as plain text instead of Markdown-formatted content',
 	keepStatsVisible: 'Keep processing statistics visible after generation finishes.',

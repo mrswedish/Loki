@@ -18,6 +18,7 @@ export const SETTINGS_KEYS = {
 	// Display
 	SHOW_MESSAGE_STATS: 'showMessageStats',
 	SHOW_THOUGHT_IN_PROGRESS: 'showThoughtInProgress',
+	ENABLE_THINKING: 'enableThinking',
 	KEEP_STATS_VISIBLE: 'keepStatsVisible',
 	AUTO_MIC_ON_EMPTY: 'autoMicOnEmpty',
 	RENDER_USER_CONTENT_AS_MARKDOWN: 'renderUserContentAsMarkdown',
@@ -54,7 +55,6 @@ export const SETTINGS_KEYS = {
 	AGENTIC_MAX_TOOL_PREVIEW_LINES: 'agenticMaxToolPreviewLines',
 	SHOW_TOOL_CALL_IN_PROGRESS: 'showToolCallInProgress',
 	// Developer
-	DISABLE_REASONING_PARSING: 'disableReasoningParsing',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',
 	GPU_INDEX: 'gpuIndex',
 	CUSTOM: 'custom'

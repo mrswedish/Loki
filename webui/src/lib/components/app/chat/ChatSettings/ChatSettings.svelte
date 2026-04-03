@@ -117,8 +117,8 @@
 					type: SettingsFieldType.CHECKBOX
 				},
 				{
-					key: SETTINGS_KEYS.DISABLE_REASONING_PARSING,
-					label: 'Inaktivera resonemangs-parsing',
+					key: SETTINGS_KEYS.ENABLE_THINKING,
+					label: 'Resonemang',
 					type: SettingsFieldType.CHECKBOX
 				},
 				{

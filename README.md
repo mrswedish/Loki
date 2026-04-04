@@ -45,9 +45,9 @@ Loki är det perfekta verktyget för att bolla känsliga ämnen, effektivisera i
 * **Modeller som ingår (förval)**:
   | Modell | Storlek | RAM-krav | Fokus |
   | :--- | :--- | :--- | :--- |
-  | **Gemma 4 E2B** | ~3.5 GB | 5 GB+ | Blixtsnabb, multimodal, 256K kontext |
+  | **Gemma 4 E2B** | ~3.5 GB | 5 GB+ | Blixtsnabb, multimodal, 128K kontext |
   | **Ministral 3B** | ~2.3 GB | 5 GB+ | Kompakt Expert |
-  | **Gemma 4 E4B** | ~6.9 GB | 9 GB+ | Analytisk, multimodal, 256K kontext |
+  | **Gemma 4 E4B** | ~6.9 GB | 9 GB+ | Analytisk, multimodal, 128K kontext |
   | **Ministral 8B** | ~5.6 GB | 10 GB+ | Allround & Kraftfull |
 
 > [!TIP]

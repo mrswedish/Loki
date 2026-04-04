@@ -65,6 +65,7 @@
 			const gpuIndex = settingsStore.config.gpuIndex as number;
 			await startServer(modelPath, contextSize, gpuIndex);
 			serverStore.activeGpuIndex = gpuIndex ?? -1;
+			serverStore.currentModelPath = modelPath;
 			await serverStore.fetch();
 			onServerStarted?.();
 		} catch (e) {

@@ -17,7 +17,10 @@ import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { agenticStore } from '$lib/stores/agentic.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
-import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
+import { contextSize, isRouterMode, serverStore } from '$lib/stores/server.svelte';
+import { startServer } from '$lib/tauri-bridge';
+import { isTauriEnv } from '$lib/server-url';
+import { toast } from 'svelte-sonner';
 import {
 	selectedModelName,
 	modelsStore,
@@ -542,7 +545,8 @@ class ChatStore {
 		assistantMessage: DatabaseMessage,
 		onComplete?: (content: string) => Promise<void>,
 		onError?: (error: Error) => void,
-		modelOverride?: string | null
+		modelOverride?: string | null,
+		isRetry = false
 	): Promise<void> {
 		let effectiveModel = modelOverride;
 
@@ -688,7 +692,7 @@ class ChatStore {
 				this.setProcessingState(assistantMessage.convId, null);
 				if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
 			},
-			onError: (error: Error) => {
+			onError: async (error: Error) => {
 				this.setStreamingActive(false);
 				if (isAbortError(error)) {
 					this.setChatLoading(assistantMessage.convId, false);
@@ -708,6 +712,38 @@ class ChatStore {
 				const contextInfo = (
 					error as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
 				).contextInfo;
+
+				// Auto-expand ctx och försök igen vid overflow (bara i Tauri, bara en gång)
+				if (contextInfo && isTauriEnv() && !isRetry) {
+					const needed = Math.ceil(contextInfo.n_prompt_tokens * 1.3);
+					const newCtx = Math.min(Math.ceil(needed / 1024) * 1024, 131_072);
+					const modelPath = serverStore.currentModelPath;
+					const gpuIndex = (config().gpuIndex as number) ?? -1;
+
+					if (modelPath && newCtx > contextInfo.n_ctx) {
+						try {
+							const kLabel = Math.round(newCtx / 1024);
+							toast.info(`Kontextfönstret utökas till ${kLabel}k tokens, försöker igen…`);
+							await startServer(modelPath, newCtx, gpuIndex);
+							serverStore.currentModelPath = modelPath;
+							await serverStore.fetch();
+							// Återskapa assistent-meddelandet och försök igen
+							const newAssistantMessage = await this.createAssistantMessage(
+								allMessages[allMessages.length - 1]?.id
+							);
+							conversationsStore.addMessageToActive(newAssistantMessage);
+							this.setChatLoading(assistantMessage.convId, true);
+							await this.streamChatCompletion(
+								allMessages, newAssistantMessage, onComplete, onError, modelOverride, true
+							);
+							return;
+						} catch (retryError) {
+							console.error('[chatStore] Auto-expand misslyckades:', retryError);
+							// fall through → visa felruta
+						}
+					}
+				}
+
 				this.showErrorDialog({
 					type: error.name === 'TimeoutError' ? ErrorDialogType.TIMEOUT : ErrorDialogType.SERVER,
 					message: error.message,

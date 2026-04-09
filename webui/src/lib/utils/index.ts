@@ -47,6 +47,7 @@ export { createMessageCountMap, getMessageCount } from './conversation-utils';
 export {
 	copyToClipboard,
 	copyCodeToClipboard,
+	copyRichToClipboard,
 	formatMessageForClipboard,
 	parseClipboardContent,
 	hasClipboardAttachments,

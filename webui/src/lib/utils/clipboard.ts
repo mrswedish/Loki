@@ -1,4 +1,9 @@
 import { toast } from 'svelte-sonner';
+import { remark } from 'remark';
+import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
+import remarkRehype from 'remark-rehype';
+import rehypeStringify from 'rehype-stringify';
 import { AttachmentType } from '$lib/enums';
 import { AGENTIC_REGEX } from '$lib/constants';
 import type {
@@ -107,6 +112,53 @@ export async function copyCodeToClipboard(
 	errorMessage = 'Failed to copy code'
 ): Promise<boolean> {
 	return copyToClipboard(rawCode, successMessage, errorMessage);
+}
+
+/**
+ * Converts markdown to HTML using remark/rehype pipeline.
+ * Supports GFM (tables, strikethrough, task lists) and line breaks.
+ */
+async function markdownToHtml(markdown: string): Promise<string> {
+	const result = await remark()
+		.use(remarkGfm)
+		.use(remarkBreaks)
+		.use(remarkRehype)
+		.use(rehypeStringify)
+		.process(markdown);
+	return String(result);
+}
+
+/**
+ * Copy message content as rich text (HTML + plain text fallback).
+ * Email clients and rich text editors receive formatted HTML with headers,
+ * bold, bullet lists etc. Plain text editors receive stripped plain text.
+ *
+ * @param cleanedMarkdown - Markdown with reasoning already stripped
+ * @param successMessage - Custom success message (optional)
+ * @param errorMessage - Custom error message (optional)
+ * @returns Promise<boolean> - True if successful, false otherwise
+ */
+export async function copyRichToClipboard(
+	cleanedMarkdown: string,
+	successMessage = 'Copied to clipboard',
+	errorMessage = 'Failed to copy to clipboard'
+): Promise<boolean> {
+	try {
+		if (navigator.clipboard && 'write' in navigator.clipboard) {
+			const html = await markdownToHtml(cleanedMarkdown);
+			const plainText = stripMarkdown(cleanedMarkdown);
+			const item = new ClipboardItem({
+				'text/html': new Blob([html], { type: 'text/html' }),
+				'text/plain': new Blob([plainText], { type: 'text/plain' })
+			});
+			await navigator.clipboard.write([item]);
+			toast.success(successMessage);
+			return true;
+		}
+	} catch {
+		// Fall through to plain text fallback
+	}
+	return copyToClipboard(stripMarkdown(cleanedMarkdown), successMessage, errorMessage);
 }
 
 /**

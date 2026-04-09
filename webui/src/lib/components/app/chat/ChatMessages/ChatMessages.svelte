@@ -5,7 +5,8 @@
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import { copyToClipboard, formatMessageForClipboard, getMessageSiblings } from '$lib/utils';
+	import { copyRichToClipboard, getMessageSiblings } from '$lib/utils';
+	import { AGENTIC_REGEX } from '$lib/constants';
 
 	interface Props {
 		class?: string;
@@ -20,13 +21,14 @@
 
 	setChatActionsContext({
 		copy: async (message: DatabaseMessage) => {
-			const asPlainText = Boolean(currentConfig.copyTextAttachmentsAsPlainText);
-			const clipboardContent = formatMessageForClipboard(
-				message.content,
-				message.extra,
-				asPlainText
-			);
-			await copyToClipboard(clipboardContent, 'Message copied to clipboard');
+			// Strip reasoning/agentic blocks, preserve markdown for HTML conversion
+			const cleanedMarkdown = message.content
+				.replace(AGENTIC_REGEX.REASONING_BLOCK, '')
+				.replace(AGENTIC_REGEX.REASONING_OPEN, '')
+				.replace(AGENTIC_REGEX.AGENTIC_TOOL_CALL_BLOCK, '')
+				.replace(AGENTIC_REGEX.AGENTIC_TOOL_CALL_OPEN, '')
+				.trim();
+			await copyRichToClipboard(cleanedMarkdown, 'Meddelande kopierat');
 		},
 
 		delete: async (message: DatabaseMessage) => {

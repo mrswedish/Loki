@@ -23,7 +23,7 @@ import { browser } from '$app/environment';
 import { toast } from 'svelte-sonner';
 import { DatabaseService } from '$lib/services/database.service';
 import { config } from '$lib/stores/settings.svelte';
-import { filterByLeafNodeId, findLeafNode } from '$lib/utils';
+import { filterByLeafNodeId, findLeafNode, stripReasoningAndMarkdown } from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
 import { MessageRole } from '$lib/enums';
 
@@ -637,6 +637,50 @@ class ConversationsStore {
 		}
 
 		this.triggerDownload({ conv: conversation, messages });
+	}
+
+	/**
+	 * Exports a conversation as a human-readable .txt file.
+	 * Strips reasoning blocks and markdown syntax so the text reads like plain prose.
+	 */
+	async downloadConversationAsText(convId: string): Promise<void> {
+		let conversation: DatabaseConversation | null;
+		let messages: DatabaseMessage[];
+
+		if (this.activeConversation?.id === convId) {
+			conversation = this.activeConversation;
+			messages = this.activeMessages;
+		} else {
+			conversation = await DatabaseService.getConversation(convId);
+			if (!conversation) return;
+			messages = await DatabaseService.getConversationMessages(convId);
+		}
+
+		const lines: string[] = [conversation.name, ''];
+
+		for (const msg of messages) {
+			if (msg.role !== MessageRole.USER && msg.role !== MessageRole.ASSISTANT) continue;
+			const clean = stripReasoningAndMarkdown(msg.content ?? '');
+			if (!clean) continue;
+			const label = msg.role === MessageRole.USER ? 'Du' : 'Loki';
+			lines.push(`${label}:`, clean, '');
+		}
+
+		const safeName = (conversation.name ?? 'konversation')
+			.toLowerCase()
+			.replace(/[^a-z0-9åäö]/gi, '_')
+			.replace(/_+/g, '_')
+			.substring(0, 40);
+
+		const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `${safeName}.txt`;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		URL.revokeObjectURL(url);
 	}
 
 	/**

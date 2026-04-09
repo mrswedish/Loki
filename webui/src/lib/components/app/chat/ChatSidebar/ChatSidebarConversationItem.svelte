@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Trash2, Pencil, MoreHorizontal, Download, Loader2, Square } from '@lucide/svelte';
+	import { Trash2, Pencil, MoreHorizontal, Download, FileText, Loader2, Square } from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { getAllLoadingChats } from '$lib/stores/chat.svelte';
@@ -147,6 +147,14 @@
 							conversationsStore.downloadConversation(conversation.id);
 						},
 						shortcut: ['shift', 'cmd', 's']
+					},
+					{
+						icon: FileText,
+						label: 'Spara som text',
+						onclick: (e: Event) => {
+							e.stopPropagation();
+							conversationsStore.downloadConversationAsText(conversation.id);
+						}
 					},
 					{
 						icon: Trash2,

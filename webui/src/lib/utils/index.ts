@@ -49,7 +49,8 @@ export {
 	copyCodeToClipboard,
 	formatMessageForClipboard,
 	parseClipboardContent,
-	hasClipboardAttachments
+	hasClipboardAttachments,
+	stripReasoningAndMarkdown
 } from './clipboard';
 
 // File preview utilities

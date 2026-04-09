@@ -1,5 +1,6 @@
 import { toast } from 'svelte-sonner';
 import { AttachmentType } from '$lib/enums';
+import { AGENTIC_REGEX } from '$lib/constants';
 import type {
 	DatabaseMessageExtra,
 	DatabaseMessageExtraTextFile,
@@ -11,6 +12,40 @@ import type {
 	ClipboardAttachment,
 	ParsedClipboardContent
 } from '$lib/types';
+
+/**
+ * Strips markdown syntax from text, converting it to plain readable text.
+ * Headers, bold, italic, links, code blocks etc are converted to their text content.
+ */
+export function stripMarkdown(text: string): string {
+	return text
+		.replace(/```[\w-]*\n?([\s\S]*?)```/g, '$1') // fenced code blocks → content only
+		.replace(/`([^`]+)`/g, '$1') // inline code
+		.replace(/^#{1,6}\s+/gm, '') // headers
+		.replace(/\*{1,3}([^*\n]+)\*{1,3}/g, '$1') // bold/italic
+		.replace(/_{1,3}([^_\n]+)_{1,3}/g, '$1') // underscore bold/italic
+		.replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1') // images → alt text
+		.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // links → link text
+		.replace(/^>\s+/gm, '') // blockquotes
+		.replace(/^[-*+]\s+/gm, '• ') // unordered lists → bullets
+		.replace(/~~([^~]+)~~/g, '$1') // ~~strikethrough~~
+		.replace(/^---+$/gm, '') // horizontal rules
+		.trim();
+}
+
+/**
+ * Strips reasoning/thinking blocks and agentic tool call markers from content,
+ * then converts markdown to plain text. Use for clipboard and text exports.
+ */
+export function stripReasoningAndMarkdown(text: string): string {
+	const cleaned = text
+		.replace(AGENTIC_REGEX.REASONING_BLOCK, '')
+		.replace(AGENTIC_REGEX.REASONING_OPEN, '')
+		.replace(AGENTIC_REGEX.AGENTIC_TOOL_CALL_BLOCK, '')
+		.replace(AGENTIC_REGEX.AGENTIC_TOOL_CALL_OPEN, '')
+		.trim();
+	return stripMarkdown(cleaned);
+}
 
 /**
  * Copy text to clipboard with toast notification
@@ -105,6 +140,9 @@ export function formatMessageForClipboard(
 	extras?: DatabaseMessageExtra[],
 	asPlainText: boolean = false
 ): string {
+	// Always strip reasoning and markdown from the main content
+	const cleanContent = stripReasoningAndMarkdown(content);
+
 	// Filter text-like attachments (TEXT, LEGACY_CONTEXT, MCP_PROMPT, and MCP_RESOURCE types)
 	const textAttachments =
 		extras?.filter(
@@ -122,11 +160,11 @@ export function formatMessageForClipboard(
 		) ?? [];
 
 	if (textAttachments.length === 0) {
-		return content;
+		return cleanContent;
 	}
 
 	if (asPlainText) {
-		const parts = [content];
+		const parts = [cleanContent];
 		for (const att of textAttachments) {
 			parts.push(att.content);
 		}
@@ -152,7 +190,7 @@ export function formatMessageForClipboard(
 		} as ClipboardTextAttachment;
 	});
 
-	return `${JSON.stringify(content)}\n${JSON.stringify(clipboardAttachments, null, 2)}`;
+	return `${JSON.stringify(cleanContent)}\n${JSON.stringify(clipboardAttachments, null, 2)}`;
 }
 
 /**

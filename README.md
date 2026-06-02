@@ -41,14 +41,14 @@ Loki är det perfekta verktyget för att bolla känsliga ämnen, effektivisera i
 ## Nyckelfunktioner
 
 * **100 % lokal AI** – All tankekraft genereras av din egen hårdvara, helt oberoende av molnet.
-* **Färdiga "smaker"** – Ett kurerat urval av optimerade modeller (GGUF) som laddas ner direkt i appen. Inkluderar modeller från Google, Microsoft och Mistral AI.
+* **Färdiga "smaker"** – Ett kurerat urval av optimerade modeller (GGUF) som laddas ner direkt i appen. Inkluderar modeller från Google och Alibaba (Qwen).
 * **Modeller som ingår (förval)**:
   | Modell | Storlek | RAM-krav | Fokus |
   | :--- | :--- | :--- | :--- |
   | **Gemma 4 E2B** | ~3.5 GB | 5 GB+ | Blixtsnabb, multimodal, 128K kontext |
-  | **Ministral 3B** | ~2.3 GB | 5 GB+ | Kompakt Expert |
+  | **Qwen3.5 4B** | ~2.7 GB | 5 GB+ | Sammanfattning & mötesprotokoll, 256K kontext |
   | **Gemma 4 E4B** | ~6.9 GB | 9 GB+ | Analytisk, multimodal, 128K kontext |
-  | **Ministral 8B** | ~5.6 GB | 10 GB+ | Allround & Kraftfull |
+  | **Qwen3.5 9B** | ~5.7 GB | 10 GB+ | Sammanfattning & strukturerade protokoll, 256K kontext |
 
 > [!TIP]
 > **Upplever du att en modell inte startar?** Om du har ett grafikkort med begränsat VRAM (t.ex. 6 GB), prova att sänka **Context Size** i inställningarna till 4096 eller 2048. Detta minskar minneskravet avsevärt vid start.
@@ -56,7 +56,7 @@ Loki är det perfekta verktyget för att bolla känsliga ämnen, effektivisera i
 > [!TIP]
 > **Problem med GPU på Windows (t.ex. AMD Radeon)?** Testa CPU-versionen av Loki (`loki-cpu`) som inte använder Vulkan alls. Den är något långsammare men fungerar på i stort sett all hårdvara.
 
-* **Intelligent dokumentanalys (Map-Reduce)** – Appen känner automatiskt av om en text är för stor för kontextfönstret och väljer då rätt strategi (extrahering eller sammanfattning) utan att du behöver göra något. Under bearbetningen visas realtidsstatus direkt i chattvyn ("Analyserar del 2 av 9…").
+* **Automatiskt kontextfönster** – Appen utökar kontextfönstret automatiskt när en text är för stor och kör om förfrågan, utan att du behöver justera inställningar.
 * **Resonemang (Thinking)** – Modeller som stödjer intern tankeprocess (som Gemma 4) kan resonera igenom svaret innan de svarar. Ger djupare och mer genomtänkta svar på komplexa frågor. Kan slås av i inställningarna för snabbare konversation.
 
 * **Hårdvaruacceleration med kontroll** – Drar nytta av Vulkan (Windows) eller Metal (macOS). Möjlighet att manuellt välja GPU-index för att tvinga fram rätt grafikkort på t.ex. bärbara datorer.

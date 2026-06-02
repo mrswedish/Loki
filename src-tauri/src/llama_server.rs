@@ -12,6 +12,14 @@ const ASSET_EXTENSION: &str = ".zip";
 #[cfg(not(target_os = "windows"))]
 const ASSET_EXTENSION: &str = ".tar.gz";
 
+/// Känd-god llama.cpp-release som installeras som standard. Att alltid hämta
+/// `releases/latest` är en risk: en framtida release kan byta asset-namn eller
+/// bryta serverns API och slå ut alla installationer samtidigt. Genom att pinna
+/// en verifierad tag får nya installationer ett känt-gott bygge. Användaren kan
+/// fortfarande uppdatera medvetet (clear_server_binary), och om den pinnade taggen
+/// av någon anledning saknas faller vi tillbaka till latest.
+const PINNED_TAG: &str = "b9467";
+
 /// Returns the primary platform key used for directory naming.
 fn primary_platform_key() -> &'static str {
     platform_keys()[0]
@@ -95,8 +103,10 @@ pub async fn ensure_server_binary(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 
-/// Fetch latest release JSON from GitHub, find the right asset URL and release tag.
-/// Tries each key in `platform_keys` in order and returns the first match.
+/// Find the right asset URL and release tag for this platform.
+/// Försöker först den pinnade taggen (PINNED_TAG) för ett känt-gott bygge och
+/// faller tillbaka till `releases/latest` om den taggen saknas eller inte har
+/// någon matchande asset.
 async fn find_release_asset() -> Result<(String, String), String> {
     let client = reqwest::Client::builder()
         .user_agent("loki-app")
@@ -104,8 +114,35 @@ async fn find_release_asset() -> Result<(String, String), String> {
         .build()
         .map_err(|e| format!("HTTP client error: {}", e))?;
 
+    // 1) Pinnad release
+    let pinned_url = format!(
+        "https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/{}",
+        PINNED_TAG
+    );
+    if let Ok(found) = fetch_asset_from(&client, &pinned_url).await {
+        return Ok(found);
+    }
+    eprintln!(
+        "[llama_server] Pinnad tag {} otillgänglig, faller tillbaka till latest",
+        PINNED_TAG
+    );
+
+    // 2) Fallback: senaste release
+    fetch_asset_from(
+        &client,
+        "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest",
+    )
+    .await
+}
+
+/// Hämtar en release-JSON från `api_url` och plockar ut (download-url, tag) för
+/// den första platform-nyckeln som matchar.
+async fn fetch_asset_from(
+    client: &reqwest::Client,
+    api_url: &str,
+) -> Result<(String, String), String> {
     let resp = client
-        .get("https://api.github.com/repos/ggml-org/llama.cpp/releases/latest")
+        .get(api_url)
         .send()
         .await
         .map_err(|e| format!("GitHub API fel: {}", e))?;

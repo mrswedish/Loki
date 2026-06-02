@@ -116,6 +116,12 @@ impl InferenceEngine {
 		cmd.arg("--ctx-size").arg(ctx.to_string());
 		cmd.arg("--n-gpu-layers").arg(gpu_layers.to_string());
 		cmd.arg("--jinja");
+		// Flash Attention i auto-läge: llama.cpp aktiverar FA där hårdvaran stödjer det
+		// (CPU, NVIDIA/coopmat2) och faller annars säkert tillbaka. Aldrig tvinga 'on' –
+		// på Vulkan/AMD ger det CPU-offload och kraftig prestandaförlust.
+		cmd.arg("--flash-attn").arg("auto");
+		// Vi har en egen frontend – stäng av llama-serverns inbyggda WebUI.
+		cmd.arg("--no-webui");
 
 		#[cfg(all(target_os = "windows", feature = "cpu-only"))]
 		{

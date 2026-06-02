@@ -80,6 +80,6 @@ cargo test
 ## Viktiga detaljer
 
 - **Svelte 5** används – syntax med runes (`$state`, `$derived`, `$effect`), inte Svelte 4-syntax.
-- **Dokumentanalys (Map-Reduce):** Tre lägen – *Auto*, *Extrahera* (extrahering), *Sammanfatta* (progressiv summering). Logiken lever i `agenticStore` + `ChatService`.
+- **Auto-expandering av kontext:** Vid context-overflow utökas ctx-fönstret automatiskt (avrundat till 1024, upp till 128K) och förfrågan körs om en gång. Logiken lever i `chat.svelte.ts`. Sessionsvis – ändrar inte användarens inställning.
 - **Versionering:** Versions-nummret finns på tre ställen: `package.json` (rot), `webui/package.json`, `src-tauri/Cargo.toml` och `src-tauri/tauri.conf.json` – håll dem i synk vid release.
 - **Playwright e2e** kräver att appen byggs och serveras på port 8181 (`npm run build && http-server ../public -p 8181`). Körs aldrig mot Tauri direkt.

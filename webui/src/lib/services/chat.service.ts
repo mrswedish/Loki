@@ -185,6 +185,19 @@ export class ChatService {
 			? ReasoningFormat.NONE
 			: ReasoningFormat.AUTO;
 
+		// reasoning_format styr bara hur llama.cpp parsar <think>-taggar – inte om
+		// modellen genererar dem. För hybrid-modeller (Qwen3.5 m.fl.) krävs
+		// chat_template_kwargs.enable_thinking för att faktiskt stänga av
+		// thinking-genereringen. Skicka bara när användaren aktivt stängt av –
+		// annars följer modellen sin egen default (Qwen3.5 = av, Gemma 4 = på).
+		// Ofarligt för modeller som saknar parametern (okända kwargs ignoreras).
+		if (enableThinking === false) {
+			requestBody.chat_template_kwargs = {
+				...requestBody.chat_template_kwargs,
+				enable_thinking: false
+			};
+		}
+
 		if (temperature !== undefined) requestBody.temperature = temperature;
 		if (max_tokens !== undefined) {
 			// Set max_tokens to -1 (infinite) when explicitly configured as 0 or null

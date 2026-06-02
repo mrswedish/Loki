@@ -208,6 +208,8 @@ export interface ApiChatCompletionRequest {
 	tools?: ApiChatCompletionTool[];
 	// Reasoning parameters
 	reasoning_format?: string;
+	// Per-request template params för hybrid-modeller (t.ex. Qwen3.5: { enable_thinking: false })
+	chat_template_kwargs?: Record<string, unknown>;
 	// Generation parameters
 	temperature?: number;
 	max_tokens?: number;

@@ -185,6 +185,12 @@ export { default as ChatFormActionAttachmentsSheet } from './ChatForm/ChatFormAc
 export { default as ChatFormActionRecord } from './ChatForm/ChatFormActions/ChatFormActionRecord.svelte';
 
 /**
+ * Toggle button for enabling/disabling model reasoning (thinking) per conversation.
+ * Reflects the enableThinking setting; off sends enable_thinking:false to the server.
+ */
+export { default as ChatFormActionThinking } from './ChatForm/ChatFormActions/ChatFormActionThinking.svelte';
+
+/**
  * Container for chat form action buttons. Arranges file attachment, audio record,
  * and submit/stop buttons in a horizontal layout. Handles conditional visibility
  * based on model capabilities and loading state.

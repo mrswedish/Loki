@@ -6,6 +6,7 @@
 		ChatFormActionAttachmentsSheet,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
+		ChatFormActionThinking,
 		McpServersSelector,
 		ModelsSelector,
 		ModelsSelectorSheet
@@ -225,6 +226,8 @@
 			{disabled}
 			onSettingsClick={() => (showChatSettingsDialogWithMcpSection = true)}
 		/>
+
+		<ChatFormActionThinking {disabled} />
 	</div>
 
 	<div class="ml-auto flex items-center gap-1.5">

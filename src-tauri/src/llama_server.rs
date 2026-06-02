@@ -20,7 +20,37 @@ const ASSET_EXTENSION: &str = ".tar.gz";
 /// av någon anledning saknas faller vi tillbaka till latest.
 const PINNED_TAG: &str = "b9467";
 
+/// CUDA-versionen vi riktar oss mot. 12.4 har bredast drivrutinskompatibilitet
+/// (NVIDIA R550+) och är säkrast på IT-kontrollerade maskiner med ev. äldre
+/// drivrutiner. Vi buntar dessutom cudart-DLL:erna så att ingen CUDA-toolkit
+/// behöver vara installerad – endast NVIDIA-drivrutinen (som följer med kortet).
+#[cfg(all(target_os = "windows", not(feature = "cpu-only")))]
+const CUDA_KEY: &str = "bin-win-cuda-12.4-x64";
+
+/// Returnerar true om en NVIDIA-GPU med fungerande drivrutin finns.
+/// Vi kör `nvidia-smi -L`: verktyget medföljer NVIDIA-drivrutinen, så att det
+/// går att köra betyder både att kortet finns OCH att drivern fungerar – exakt
+/// det vi behöver veta innan vi väljer CUDA-backend. Resultatet cachas.
+#[cfg(all(target_os = "windows", not(feature = "cpu-only")))]
+fn has_nvidia_gpu() -> bool {
+    use std::sync::OnceLock;
+    static DETECTED: OnceLock<bool> = OnceLock::new();
+    *DETECTED.get_or_init(|| {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        std::process::Command::new("nvidia-smi")
+            .arg("-L")
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map(|o| o.status.success() && !o.stdout.is_empty())
+            .unwrap_or(false)
+    })
+}
+
 /// Returns the primary platform key used for directory naming.
+/// På Windows GPU-build väljs CUDA-katalogen om en NVIDIA-GPU upptäcks, annars
+/// Vulkan. Detta håller CUDA- och Vulkan-installationerna i skilda kataloger så
+/// att binär + DLL:er aldrig blandas ihop mellan backends.
 fn primary_platform_key() -> &'static str {
     platform_keys()[0]
 }
@@ -69,15 +99,30 @@ pub async fn ensure_server_binary(app: &AppHandle) -> Result<PathBuf, String> {
     std::fs::create_dir_all(&bin_dir)
         .map_err(|e| format!("Kunde inte skapa bin-katalog: {}", e))?;
 
-    let (url, tag) = find_release_asset().await?;
-    let bytes = download_asset(&url).await?;
+    let asset = find_release_asset().await?;
+    let bytes = download_asset(&asset.binary_url).await?;
 
-    if url.ends_with(".zip") {
+    if asset.binary_url.ends_with(".zip") {
         extract_zip(&bytes, &bin_dir)?;
-    } else if url.ends_with(".tar.gz") {
+    } else if asset.binary_url.ends_with(".tar.gz") {
         extract_tgz(&bytes, &bin_dir)?;
     } else {
-        return Err(format!("Okänt arkivformat för URL: {}", url));
+        return Err(format!("Okänt arkivformat för URL: {}", asset.binary_url));
+    }
+
+    // CUDA-binären länkar dynamiskt mot runtime-DLL:er (cudart/cublas) som ligger
+    // i ett separat cudart-paket. Hämta och packa upp det bredvid binären så att
+    // appen blir self-contained (ingen CUDA-toolkit krävs på maskinen). extract_zip
+    // plockar redan ut alla .dll på Windows.
+    if let Some(cudart_url) = &asset.cudart_url {
+        match download_asset(cudart_url).await {
+            Ok(cudart_bytes) => {
+                if let Err(e) = extract_zip(&cudart_bytes, &bin_dir) {
+                    eprintln!("[llama_server] Kunde inte packa upp cudart-DLL:er: {}", e);
+                }
+            }
+            Err(e) => eprintln!("[llama_server] Kunde inte hämta cudart-paket: {}", e),
+        }
     }
 
     if !bin_path.exists() {
@@ -96,18 +141,29 @@ pub async fn ensure_server_binary(app: &AppHandle) -> Result<PathBuf, String> {
     }
 
     // Persist installed version so we can show it in the UI and skip re-downloads
-    std::fs::write(version_file_path(app), &tag)
+    std::fs::write(version_file_path(app), &asset.tag)
         .map_err(|e| format!("Kunde inte spara version: {}", e))?;
 
     Ok(bin_path)
 }
 
 
+/// Resultatet av att slå upp rätt llama-server-asset för denna plattform.
+struct ReleaseAsset {
+    /// URL till själva binär-arkivet (zip/tgz).
+    binary_url: String,
+    /// URL till cudart-paketet med runtime-DLL:er – endast satt när binären är
+    /// ett CUDA-bygge på Windows.
+    cudart_url: Option<String>,
+    /// Release-taggen (t.ex. "b9467").
+    tag: String,
+}
+
 /// Find the right asset URL and release tag for this platform.
 /// Försöker först den pinnade taggen (PINNED_TAG) för ett känt-gott bygge och
 /// faller tillbaka till `releases/latest` om den taggen saknas eller inte har
 /// någon matchande asset.
-async fn find_release_asset() -> Result<(String, String), String> {
+async fn find_release_asset() -> Result<ReleaseAsset, String> {
     let client = reqwest::Client::builder()
         .user_agent("loki-app")
         .timeout(std::time::Duration::from_secs(30))
@@ -135,12 +191,12 @@ async fn find_release_asset() -> Result<(String, String), String> {
     .await
 }
 
-/// Hämtar en release-JSON från `api_url` och plockar ut (download-url, tag) för
-/// den första platform-nyckeln som matchar.
+/// Hämtar en release-JSON från `api_url` och plockar ut binär-URL (+ ev. cudart-URL)
+/// och tag för den första platform-nyckeln som matchar.
 async fn fetch_asset_from(
     client: &reqwest::Client,
     api_url: &str,
-) -> Result<(String, String), String> {
+) -> Result<ReleaseAsset, String> {
     let resp = client
         .get(api_url)
         .send()
@@ -173,11 +229,29 @@ async fn fetch_asset_from(
                 .map(|n| n.starts_with("llama-") && n.contains(key) && n.ends_with(ASSET_EXTENSION))
                 .unwrap_or(false)
         }) {
-            let url = asset["browser_download_url"]
+            let binary_url = asset["browser_download_url"]
                 .as_str()
                 .map(|s| s.to_string())
                 .ok_or("Ingen download URL i asset")?;
-            return Ok((url, tag));
+
+            // För CUDA-bygget: hitta matchande cudart-paket (runtime-DLL:er) i
+            // samma release. Namnformat: cudart-llama-bin-win-cuda-12.4-x64.zip.
+            let cudart_url = if key.contains("cuda") {
+                assets
+                    .iter()
+                    .find(|a| {
+                        a["name"]
+                            .as_str()
+                            .map(|n| n.starts_with("cudart-") && n.contains(key))
+                            .unwrap_or(false)
+                    })
+                    .and_then(|a| a["browser_download_url"].as_str())
+                    .map(|s| s.to_string())
+            } else {
+                None
+            };
+
+            return Ok(ReleaseAsset { binary_url, cudart_url, tag });
         }
     }
 
@@ -202,7 +276,13 @@ fn platform_keys() -> Vec<&'static str> {
     ];
 
     #[cfg(all(target_os = "windows", not(feature = "cpu-only")))]
-    return vec!["bin-win-vulkan-x64"];
+    {
+        // NVIDIA → prova CUDA först, med Vulkan som fallback. Annars bara Vulkan.
+        if has_nvidia_gpu() {
+            return vec![CUDA_KEY, "bin-win-vulkan-x64"];
+        }
+        return vec!["bin-win-vulkan-x64"];
+    }
 
     #[cfg(target_os = "macos")]
     return vec!["bin-macos-arm64"];

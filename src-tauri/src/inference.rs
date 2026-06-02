@@ -135,8 +135,12 @@ impl InferenceEngine {
 			let index = gpu_index.unwrap_or(-1);
 			if index >= 0 {
 				let index_str = index.to_string();
+				// Sätt env för båda backends – binären använder den som gäller och
+				// ignorerar den andra. Vulkan-bygget läser GGML_VK_*, CUDA-bygget
+				// läser CUDA_VISIBLE_DEVICES.
 				cmd.env("GGML_VK_VISIBLE_DEVICES", &index_str);
 				cmd.env("GGML_VULKAN_DEVICE", &index_str);
+				cmd.env("CUDA_VISIBLE_DEVICES", &index_str);
 			}
 		}
 

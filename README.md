@@ -60,6 +60,7 @@ Loki är det perfekta verktyget för att bolla känsliga ämnen, effektivisera i
 * **Resonemang (Thinking)** – Modeller som stödjer intern tankeprocess (som Gemma 4) kan resonera igenom svaret innan de svarar. Ger djupare och mer genomtänkta svar på komplexa frågor. Kan slås av i inställningarna för snabbare konversation.
 
 * **Hårdvaruacceleration med kontroll** – Drar nytta av Vulkan (Windows) eller Metal (macOS). Möjlighet att manuellt välja GPU-index för att tvinga fram rätt grafikkort på t.ex. bärbara datorer.
+* **Automatisk CUDA på NVIDIA** – Har du ett NVIDIA-grafikkort använder Loki automatiskt CUDA för bästa prestanda. Nödvändiga runtime-filer buntas med appen – endast NVIDIA-drivrutinen krävs (ingen separat CUDA-installation behövs). Saknas CUDA-stöd faller appen tillbaka till Vulkan och därefter CPU.
 * **CPU-version för AMD och äldre hårdvara** – En separat CPU-build (utan Vulkan) finns tillgänglig för maskiner där GPU-versionen inte fungerar, t.ex. vissa AMD Radeon-konfigurationer.
 * **Dynamiskt kontextstöd** – Justera storleken på AI-minnet (tokens) med en enkel slider för att optimera prestanda vs. RAM.
 * **Smart RAM-varning** – Appen beräknar minnesbehovet i realtid och varnar om inställningarna riskerar att överstiga din dators tillgängliga RAM.

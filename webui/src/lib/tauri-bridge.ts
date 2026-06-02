@@ -67,9 +67,20 @@ export async function listAvailableModels(): Promise<ModelStatus[]> {
 
 /** Starta llama-server med vald modell. Returnerar server-URL. */
 export async function startServer(modelPath: string, contextSize?: number, gpuIndex?: number): Promise<string> {
-	const url = await invoke<string>('start_server', { modelPath, contextSize, gpuIndex });
-	setServerBase(url);
-	return url;
+	const result = await invoke<{ url: string; fellBackToCpu: boolean }>('start_server', {
+		modelPath,
+		contextSize,
+		gpuIndex
+	});
+	setServerBase(result.url);
+
+	// GPU misslyckades och vi körde om på CPU – informera diskret (en gång per start).
+	if (result.fellBackToCpu) {
+		const { toast } = await import('svelte-sonner');
+		toast.info('GPU otillgänglig – kör på CPU (långsammare).');
+	}
+
+	return result.url;
 }
 
 /** Stäng av llama-server */

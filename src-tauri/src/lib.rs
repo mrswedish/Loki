@@ -162,7 +162,15 @@ async fn download_server_binary(app: tauri::AppHandle) -> Result<String, String>
 
 // ─── Server Lifecycle ────────────────────────────────────
 
-/// Starta llama-server med vald modell. Returnerar "http://127.0.0.1:{port}".
+/// Resultat av att starta servern: URL + om vi föll tillbaka till CPU.
+#[derive(Serialize)]
+struct StartServerResult {
+	url: String,
+	#[serde(rename = "fellBackToCpu")]
+	fell_back_to_cpu: bool,
+}
+
+/// Starta llama-server med vald modell.
 #[tauri::command]
 async fn start_server(
 	model_path: String,
@@ -170,7 +178,7 @@ async fn start_server(
 	gpu_index: Option<i32>,
 	engine: tauri::State<'_, inference::SharedEngine>,
 	app: tauri::AppHandle,
-) -> Result<String, String> {
+) -> Result<StartServerResult, String> {
 	let bin_path = llama_server::ensure_server_binary(&app).await?;
 
 	let engine_clone = engine.inner().clone();
@@ -179,7 +187,10 @@ async fn start_server(
 		let mut eng = engine_clone.lock().map_err(|e| format!("Lock-fel: {}", e))?;
 		eng.set_server_binary(bin_path);
 		let port = eng.start(&model_path, context_size, gpu_index, log_dir)?;
-		Ok(format!("http://127.0.0.1:{}", port))
+		Ok(StartServerResult {
+			url: format!("http://127.0.0.1:{}", port),
+			fell_back_to_cpu: eng.fell_back_to_cpu(),
+		})
 	})
 	.await
 	.map_err(|e| format!("Tokio join error: {}", e))?

@@ -665,9 +665,11 @@ class ChatStore {
 			) => {
 				this.setStreamingActive(false);
 				finalizeReasoning();
-				const combinedContent = hasStreamedChunks
-					? streamedContent
-					: wrapReasoningContent(finalContent || '', reasoningContent);
+				const combinedContent = ChatService.stripRawThinkTags(
+					hasStreamedChunks
+						? streamedContent
+						: wrapReasoningContent(finalContent || '', reasoningContent)
+				);
 				const updateData: Record<string, unknown> = {
 					content: combinedContent,
 					toolCalls: toolCallContent || streamedToolCallContent,
@@ -1142,9 +1144,11 @@ class ChatStore {
 					) => {
 						finalizeReasoning();
 
-						const appendedFromCompletion = hasReceivedContent
-							? appendedContent
-							: wrapReasoningContent(finalContent || '', reasoningContent);
+						const appendedFromCompletion = ChatService.stripRawThinkTags(
+							hasReceivedContent
+								? appendedContent
+								: wrapReasoningContent(finalContent || '', reasoningContent)
+						);
 						const fullContent = originalContent + appendedFromCompletion;
 
 						await DatabaseService.updateMessage(msg.id, {

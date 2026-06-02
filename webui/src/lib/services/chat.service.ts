@@ -21,6 +21,18 @@ import { modelsStore } from '$lib/stores/models.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 
 export class ChatService {
+	/**
+	 * Tar bort råa <think>...</think>-block (inkl. tomma) ur ett färdigt svar.
+	 * Vissa hybrid-modeller (t.ex. Qwen3.5) läcker tomma tankeblock i content när
+	 * thinking är av och reasoning_format=none – detta håller dem borta ur det
+	 * visade/sparade svaret oberoende av serverns parsningsbeteende.
+	 */
+	static stripRawThinkTags(content: string): string {
+		return content
+			.replace(AGENTIC_REGEX.THINK_BLOCK, '')
+			.replace(AGENTIC_REGEX.THINK_OPEN, '');
+	}
+
 	private static stripReasoningContent(
 		content: ApiChatMessageData['content'] | null | undefined
 	): ApiChatMessageData['content'] | null | undefined {
@@ -32,6 +44,7 @@ export class ChatService {
 			return content
 				.replace(AGENTIC_REGEX.REASONING_BLOCK, '')
 				.replace(AGENTIC_REGEX.REASONING_OPEN, '')
+				.replace(AGENTIC_REGEX.THINK_BLOCK, '')
 				.replace(AGENTIC_REGEX.AGENTIC_TOOL_CALL_BLOCK, '')
 				.replace(AGENTIC_REGEX.AGENTIC_TOOL_CALL_OPEN, '');
 		}
@@ -47,6 +60,7 @@ export class ChatService {
 				text: part.text
 					.replace(AGENTIC_REGEX.REASONING_BLOCK, '')
 					.replace(AGENTIC_REGEX.REASONING_OPEN, '')
+					.replace(AGENTIC_REGEX.THINK_BLOCK, '')
 					.replace(AGENTIC_REGEX.AGENTIC_TOOL_CALL_BLOCK, '')
 					.replace(AGENTIC_REGEX.AGENTIC_TOOL_CALL_OPEN, '')
 			};

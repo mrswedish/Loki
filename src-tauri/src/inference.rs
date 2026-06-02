@@ -14,6 +14,8 @@ pub struct InferenceEngine {
 	ctx_size: Option<u32>,
 	gpu_index: Option<i32>,
 	log_dir: Option<PathBuf>,
+	/// True om senaste start föll tillbaka till CPU efter att GPU misslyckats.
+	fell_back_to_cpu: bool,
 }
 
 // Safety: Child is owned and only accessed through Mutex
@@ -35,7 +37,13 @@ impl InferenceEngine {
 			ctx_size: None,
 			gpu_index: None,
 			log_dir: None,
+			fell_back_to_cpu: false,
 		}
+	}
+
+	/// Returnerar true om senaste lyckade start föll tillbaka till CPU (GPU misslyckades).
+	pub fn fell_back_to_cpu(&self) -> bool {
+		self.fell_back_to_cpu
 	}
 
 	pub fn set_server_binary(&mut self, path: PathBuf) {
@@ -75,16 +83,28 @@ impl InferenceEngine {
 
 		// CPU-only build: skip GPU entirely
 		#[cfg(feature = "cpu-only")]
-		let port = self.try_spawn(&binary, path, ctx, gpu_index, log_dir.clone(), 0, Duration::from_secs(300))?;
+		let port = {
+			self.fell_back_to_cpu = false;
+			self.try_spawn(&binary, path, ctx, gpu_index, log_dir.clone(), 0, true, Duration::from_secs(300))?
+		};
 
-		// GPU build: try Vulkan first, fall back to CPU on failure (e.g. OOM)
+		// GPU build: try Vulkan first, fall back to a *real* CPU run on failure
+		// (OOM, missing Vulkan extension, crashing driver). Den första körningen kör
+		// GPU; faller den kör vi om med force_cpu=true som tvingar bort Vulkan helt
+		// (--device none, -fit off, tömd Vulkan-env) så device-init aldrig sker.
 		#[cfg(not(feature = "cpu-only"))]
-		let port = self
-			.try_spawn(&binary, path, ctx, gpu_index, log_dir.clone(), 99, Duration::from_secs(60))
-			.or_else(|e| {
-				eprintln!("[InferenceEngine] GPU misslyckades ({}), startar om med CPU (--n-gpu-layers 0)...", e);
-				self.try_spawn(&binary, path, ctx, gpu_index, log_dir.clone(), 0, Duration::from_secs(300))
-			})?;
+		let port = match self.try_spawn(&binary, path, ctx, gpu_index, log_dir.clone(), 99, false, Duration::from_secs(60)) {
+			Ok(p) => {
+				self.fell_back_to_cpu = false;
+				p
+			}
+			Err(e) => {
+				eprintln!("[InferenceEngine] GPU misslyckades ({}), startar om på CPU (--device none)...", e);
+				let p = self.try_spawn(&binary, path, ctx, gpu_index, log_dir.clone(), 0, true, Duration::from_secs(300))?;
+				self.fell_back_to_cpu = true;
+				p
+			}
+		};
 
 		self.port = Some(port);
 		self.model_path = Some(path.to_string());
@@ -105,6 +125,7 @@ impl InferenceEngine {
 		gpu_index: Option<i32>,
 		log_dir: Option<PathBuf>,
 		gpu_layers: u32,
+		force_cpu: bool,
 		timeout: Duration,
 	) -> Result<u16, String> {
 		let port = free_port()?;
@@ -123,24 +144,29 @@ impl InferenceEngine {
 		// Vi har en egen frontend – stäng av llama-serverns inbyggda WebUI.
 		cmd.arg("--no-webui");
 
-		#[cfg(all(target_os = "windows", feature = "cpu-only"))]
-		{
-			// Hide all Vulkan devices so the Vulkan binary runs fully on CPU
+		if force_cpu {
+			// Äkta CPU-körning: hoppa över all GPU/Vulkan-init. Enbart --n-gpu-layers 0
+			// räcker INTE i Vulkan-bygget – `-fit on` (default) gör device-anrop för att
+			// mäta minne, vilket kraschar på trasiga/inkompatibla drivrutiner
+			// (t.ex. AMD iGPU: ErrorExtensionNotPresent). --device none + -fit off tar
+			// bort alla device-anrop. Tömd Vulkan-env är bälte-och-hängslen på Windows.
+			cmd.arg("--device").arg("none");
+			cmd.arg("-fit").arg("off");
 			cmd.env("GGML_VK_VISIBLE_DEVICES", "");
 			cmd.env("GGML_VULKAN_DEVICE", "");
-		}
-
-		#[cfg(all(target_os = "windows", not(feature = "cpu-only")))]
-		{
-			let index = gpu_index.unwrap_or(-1);
-			if index >= 0 {
-				let index_str = index.to_string();
-				// Sätt env för båda backends – binären använder den som gäller och
-				// ignorerar den andra. Vulkan-bygget läser GGML_VK_*, CUDA-bygget
-				// läser CUDA_VISIBLE_DEVICES.
-				cmd.env("GGML_VK_VISIBLE_DEVICES", &index_str);
-				cmd.env("GGML_VULKAN_DEVICE", &index_str);
-				cmd.env("CUDA_VISIBLE_DEVICES", &index_str);
+		} else {
+			#[cfg(all(target_os = "windows", not(feature = "cpu-only")))]
+			{
+				let index = gpu_index.unwrap_or(-1);
+				if index >= 0 {
+					let index_str = index.to_string();
+					// Sätt env för båda backends – binären använder den som gäller och
+					// ignorerar den andra. Vulkan-bygget läser GGML_VK_*, CUDA-bygget
+					// läser CUDA_VISIBLE_DEVICES.
+					cmd.env("GGML_VK_VISIBLE_DEVICES", &index_str);
+					cmd.env("GGML_VULKAN_DEVICE", &index_str);
+					cmd.env("CUDA_VISIBLE_DEVICES", &index_str);
+				}
 			}
 		}
 

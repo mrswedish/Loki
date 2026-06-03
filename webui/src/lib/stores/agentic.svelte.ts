@@ -270,7 +270,13 @@ class AgenticStore {
 		} catch (error) {
 			const normalizedError = error instanceof Error ? error : new Error(String(error));
 			this.updateSession(conversationId, { lastError: normalizedError });
-			onError?.(normalizedError);
+			// Vid context-overflow: anropa INTE onError här. Returnera felet (med contextInfo)
+			// så att chat-storen kan auto-expanda och köra om förfrågan en gång – annars skulle
+			// både denna onError och retry-logiken trigga och dubbelhantera felet.
+			const hasContextInfo = !!(
+				normalizedError as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
+			).contextInfo;
+			if (!hasContextInfo) onError?.(normalizedError);
 			return { handled: true, error: normalizedError };
 		} finally {
 			this.updateSession(conversationId, { isRunning: false });
@@ -445,14 +451,26 @@ class AgenticStore {
 
 					return;
 				}
+				// Behåll originalfelet om det redan är ett Error – det bär ev. contextInfo
+				// (context-overflow) som chat-storen behöver för auto-expand. new Error()
+				// skulle tappa det fältet.
 				const normalizedError = error instanceof Error ? error : new Error('LLM stream error');
-				onChunk?.(`${LLM_ERROR_BLOCK_START}${normalizedError.message}${LLM_ERROR_BLOCK_END}`);
-				onComplete?.(
-					'',
-					undefined,
-					this.buildFinalTimings(capturedTimings, agenticTimings),
-					undefined
-				);
+
+				// Vid context-overflow: skriv inte ut felblock eller avsluta meddelandet här.
+				// Kasta vidare med contextInfo intakt så att chat-storen kan utöka kontexten
+				// och köra om hela förfrågan.
+				const hasContextInfo = !!(
+					normalizedError as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
+				).contextInfo;
+				if (!hasContextInfo) {
+					onChunk?.(`${LLM_ERROR_BLOCK_START}${normalizedError.message}${LLM_ERROR_BLOCK_END}`);
+					onComplete?.(
+						'',
+						undefined,
+						this.buildFinalTimings(capturedTimings, agenticTimings),
+						undefined
+					);
+				}
 
 				throw normalizedError;
 			}

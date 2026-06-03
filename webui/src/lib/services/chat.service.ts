@@ -20,6 +20,14 @@ import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } f
 import { modelsStore } from '$lib/stores/models.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 
+/**
+ * Matchar llama.cpp:s context-overflow-meddelande när det saknar strukturerade
+ * fält, t.ex. "request (23908 tokens) exceeds the available context size (16384 tokens)".
+ * Grupp 1 = prompt-tokens, grupp 2 = tillgänglig ctx.
+ */
+export const CONTEXT_OVERFLOW_MESSAGE_REGEX =
+	/request \((\d+) tokens\) exceeds the available context size \((\d+) tokens\)/i;
+
 export class ChatService {
 	/**
 	 * Tar bort råa <think>...</think>-block (inkl. tomma) ur ett färdigt svar.
@@ -28,9 +36,7 @@ export class ChatService {
 	 * visade/sparade svaret oberoende av serverns parsningsbeteende.
 	 */
 	static stripRawThinkTags(content: string): string {
-		return content
-			.replace(AGENTIC_REGEX.THINK_BLOCK, '')
-			.replace(AGENTIC_REGEX.THINK_OPEN, '');
+		return content.replace(AGENTIC_REGEX.THINK_BLOCK, '').replace(AGENTIC_REGEX.THINK_OPEN, '');
 	}
 
 	private static stripReasoningContent(
@@ -195,9 +201,8 @@ export class ChatService {
 			requestBody.model = options.model;
 		}
 
-		requestBody.reasoning_format = enableThinking === false
-			? ReasoningFormat.NONE
-			: ReasoningFormat.AUTO;
+		requestBody.reasoning_format =
+			enableThinking === false ? ReasoningFormat.NONE : ReasoningFormat.AUTO;
 
 		// reasoning_format styr bara hur llama.cpp parsar <think>-taggar – inte om
 		// modellen genererar dem. För hybrid-modeller (Qwen3.5 m.fl.) krävs
@@ -910,6 +915,18 @@ export class ChatService {
 					n_prompt_tokens: errorData.error.n_prompt_tokens,
 					n_ctx: errorData.error.n_ctx
 				};
+			}
+
+			// Fallback: vissa llama.cpp-svar saknar strukturerade fält och har bara
+			// message-strängen. Plocka ut talen ur texten så auto-expand ändå kan trigga.
+			if (!error.contextInfo) {
+				const match = message.match(CONTEXT_OVERFLOW_MESSAGE_REGEX);
+				if (match) {
+					error.contextInfo = {
+						n_prompt_tokens: Number(match[1]),
+						n_ctx: Number(match[2])
+					};
+				}
 			}
 
 			return error;

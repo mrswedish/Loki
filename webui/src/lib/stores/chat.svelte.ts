@@ -540,6 +540,38 @@ class ChatStore {
 		}
 	}
 
+	/**
+	 * Startar om llama-server med ett större kontextfönster vid context-overflow.
+	 * Delas av både vanlig chatt och det agentiska flödet. Returnerar true om
+	 * servern faktiskt startades om med större ctx (anroparen ska då försöka igen),
+	 * annars false. Endast i Tauri – i webben finns ingen server att starta om.
+	 */
+	private async tryAutoExpandContext(contextInfo: {
+		n_prompt_tokens: number;
+		n_ctx: number;
+	}): Promise<boolean> {
+		if (!isTauriEnv()) return false;
+
+		const needed = Math.ceil(contextInfo.n_prompt_tokens * 1.3);
+		const newCtx = Math.min(Math.ceil(needed / 1024) * 1024, 131_072);
+		const modelPath = serverStore.currentModelPath;
+		const gpuIndex = (config().gpuIndex as number) ?? -1;
+
+		if (!modelPath || newCtx <= contextInfo.n_ctx) return false;
+
+		try {
+			const kLabel = Math.round(newCtx / 1024);
+			toast.info(`Kontextfönstret utökas till ${kLabel}k tokens, försöker igen…`);
+			await startServer(modelPath, newCtx, gpuIndex);
+			serverStore.currentModelPath = modelPath;
+			await serverStore.fetch();
+			return true;
+		} catch (retryError) {
+			console.error('[chatStore] Auto-expand misslyckades:', retryError);
+			return false;
+		}
+	}
+
 	private async streamChatCompletion(
 		allMessages: DatabaseMessage[],
 		assistantMessage: DatabaseMessage,
@@ -716,34 +748,22 @@ class ChatStore {
 				).contextInfo;
 
 				// Auto-expand ctx och försök igen vid overflow (bara i Tauri, bara en gång)
-				if (contextInfo && isTauriEnv() && !isRetry) {
-					const needed = Math.ceil(contextInfo.n_prompt_tokens * 1.3);
-					const newCtx = Math.min(Math.ceil(needed / 1024) * 1024, 131_072);
-					const modelPath = serverStore.currentModelPath;
-					const gpuIndex = (config().gpuIndex as number) ?? -1;
-
-					if (modelPath && newCtx > contextInfo.n_ctx) {
-						try {
-							const kLabel = Math.round(newCtx / 1024);
-							toast.info(`Kontextfönstret utökas till ${kLabel}k tokens, försöker igen…`);
-							await startServer(modelPath, newCtx, gpuIndex);
-							serverStore.currentModelPath = modelPath;
-							await serverStore.fetch();
-							// Återskapa assistent-meddelandet och försök igen
-							const newAssistantMessage = await this.createAssistantMessage(
-								allMessages[allMessages.length - 1]?.id
-							);
-							conversationsStore.addMessageToActive(newAssistantMessage);
-							this.setChatLoading(assistantMessage.convId, true);
-							await this.streamChatCompletion(
-								allMessages, newAssistantMessage, onComplete, onError, modelOverride, true
-							);
-							return;
-						} catch (retryError) {
-							console.error('[chatStore] Auto-expand misslyckades:', retryError);
-							// fall through → visa felruta
-						}
-					}
+				if (contextInfo && !isRetry && (await this.tryAutoExpandContext(contextInfo))) {
+					// Återskapa assistent-meddelandet och försök igen
+					const newAssistantMessage = await this.createAssistantMessage(
+						allMessages[allMessages.length - 1]?.id
+					);
+					conversationsStore.addMessageToActive(newAssistantMessage);
+					this.setChatLoading(assistantMessage.convId, true);
+					await this.streamChatCompletion(
+						allMessages,
+						newAssistantMessage,
+						onComplete,
+						onError,
+						modelOverride,
+						true
+					);
+					return;
 				}
 
 				this.showErrorDialog({
@@ -766,7 +786,42 @@ class ChatStore {
 				signal: abortController.signal,
 				perChatOverrides
 			});
-			if (agenticResult.handled) return;
+			if (agenticResult.handled) {
+				// Auto-expand även i agentiskt läge: om flödet failade pga context-overflow,
+				// utöka ctx och kör om hela förfrågan en gång (samma vakt som vanlig chatt).
+				const agenticContextInfo = (
+					agenticResult.error as
+						| (Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } })
+						| undefined
+				)?.contextInfo;
+				if (agenticContextInfo) {
+					if (!isRetry && (await this.tryAutoExpandContext(agenticContextInfo))) {
+						const newAssistantMessage = await this.createAssistantMessage(
+							allMessages[allMessages.length - 1]?.id
+						);
+						conversationsStore.addMessageToActive(newAssistantMessage);
+						this.setChatLoading(assistantMessage.convId, true);
+						await this.streamChatCompletion(
+							allMessages,
+							newAssistantMessage,
+							onComplete,
+							onError,
+							modelOverride,
+							true
+						);
+					} else if (agenticResult.error) {
+						// Auto-expand kördes inte/lyckades inte (t.ex. redan på retry eller
+						// ctx-taket nått). Agentic-flödet sväljer felblocket vid overflow, så
+						// visa felrutan här i stället för att avsluta tyst.
+						this.showErrorDialog({
+							type: ErrorDialogType.SERVER,
+							message: agenticResult.error.message,
+							contextInfo: agenticContextInfo
+						});
+					}
+				}
+				return;
+			}
 		}
 
 		const completionOptions = {

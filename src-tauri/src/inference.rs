@@ -135,6 +135,10 @@ impl InferenceEngine {
 		cmd.arg("--port").arg(port.to_string());
 		cmd.arg("--host").arg("127.0.0.1");
 		cmd.arg("--ctx-size").arg(ctx.to_string());
+		// Desktop-app: en chatt i taget. Utan detta väljer llama.cpp n_parallel=4 (auto)
+		// och reserverar KV-cache för slots vi aldrig använder – hela ctx ska gå till den
+		// enda förfrågan.
+		cmd.arg("--parallel").arg("1");
 		cmd.arg("--n-gpu-layers").arg(gpu_layers.to_string());
 		cmd.arg("--jinja");
 		// Flash Attention i auto-läge: llama.cpp aktiverar FA där hårdvaran stödjer det

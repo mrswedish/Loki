@@ -143,6 +143,11 @@ impl InferenceEngine {
 		cmd.arg("--flash-attn").arg("auto");
 		// Vi har en egen frontend – stäng av llama-serverns inbyggda WebUI.
 		cmd.arg("--no-webui");
+		// Aldrig kasta bort äldsta tokens när kontexten fylls. Context-shift är till
+		// för oändlig chatt, men för sammanfattning av stora transkript skulle det
+		// tyst trunkera början/mitten → ofullständig sammanfattning. Loki utökar
+		// istället kontexten dynamiskt (auto-expansion i chat-storen).
+		cmd.arg("--no-context-shift");
 
 		if force_cpu {
 			// Äkta CPU-körning: hoppa över all GPU/Vulkan-init. Enbart --n-gpu-layers 0

@@ -5,7 +5,7 @@
 	import { page } from '$app/state';
 	import { untrack } from 'svelte';
 	import { ChatSidebar, DialogConversationTitleUpdate } from '$lib/components/app';
-	import { isLoading } from '$lib/stores/chat.svelte';
+	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -166,6 +166,12 @@
 
 		const interval = setInterval(async () => {
 			try {
+				// Hoppa över hälsokontrollen medan en chatt streamar/bearbetar. På långsam
+				// hårdvara (t.ex. AMD iGPU) kan prompt-processing av stora dokument ta flera
+				// minuter, under vilka /health inte hinner svara. Watchdogen skulle då döda
+				// den fullt friska, upptagna servern mitt i körningen → "Network error".
+				if (isChatStreaming()) return;
+
 				const alive = await checkServerHealth();
 				if (!alive) {
 					console.warn('[layout] llama-server inte svarar – försöker starta om...');
@@ -261,8 +267,15 @@
 
 {#if !tauriServerReady || showModelPicker}
 	<TauriModelSelector
-		onServerStarted={() => { tauriServerReady = true; showModelPicker = false; }}
-		onCancel={showModelPicker ? () => { showModelPicker = false; } : undefined}
+		onServerStarted={() => {
+			tauriServerReady = true;
+			showModelPicker = false;
+		}}
+		onCancel={showModelPicker
+			? () => {
+					showModelPicker = false;
+				}
+			: undefined}
 	/>
 {/if}
 
@@ -282,7 +295,14 @@
 	<Sidebar.Provider bind:open={sidebarOpen}>
 		<div class="flex h-screen w-full" style:height="{innerHeight}px">
 			<Sidebar.Root class="h-full">
-				<ChatSidebar bind:this={chatSidebar} onShowModelSelector={isTauriEnv() ? () => { showModelPicker = true; } : undefined} />
+				<ChatSidebar
+					bind:this={chatSidebar}
+					onShowModelSelector={isTauriEnv()
+						? () => {
+								showModelPicker = true;
+							}
+						: undefined}
+				/>
 			</Sidebar.Root>
 
 			{#if !(alwaysShowSidebarOnDesktop && isDesktop)}

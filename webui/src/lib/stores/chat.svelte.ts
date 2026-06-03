@@ -532,6 +532,14 @@ class ChatStore {
 			const contextInfo = (
 				error as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
 			).contextInfo;
+			// Context-overflow hanteras redan av auto-expand i streamCallbacks.onError
+			// (utökar ctx och kör om förfrågan). ChatService.sendMessage anropar onError
+			// OCH kastar vidare hit – om vi visade felrutan här skulle den blinka till
+			// medan auto-expand startar om servern. onError-grenen visar själv felrutan
+			// om auto-expand inte lyckas, så hoppa över den här.
+			if (contextInfo && isTauriEnv()) {
+				return;
+			}
 			this.showErrorDialog({
 				type: dialogType,
 				message: error instanceof Error ? error.message : 'Unknown error',

@@ -62,8 +62,15 @@ impl InferenceEngine {
 	}
 
 	pub fn start(&mut self, path: &str, ctx_size: Option<u32>, gpu_index: Option<i32>, log_dir: Option<PathBuf>) -> Result<u16, String> {
-		// Don't restart if same model already loaded and server alive
-		if self.model_path.as_deref() == Some(path) && self.server_is_alive() {
+		// Don't restart if same model already loaded and server alive – men bara om
+		// ctx_size och gpu_index är oförändrade. Auto-expand anropar start() med samma
+		// modell men STÖRRE ctx_size; då MÅSTE servern startas om, annars körs den vidare
+		// med den gamla (för lilla) kontexten och overflow-felet kvarstår.
+		if self.model_path.as_deref() == Some(path)
+			&& self.ctx_size == ctx_size
+			&& self.gpu_index == gpu_index
+			&& self.server_is_alive()
+		{
 			return Ok(self.port.unwrap());
 		}
 

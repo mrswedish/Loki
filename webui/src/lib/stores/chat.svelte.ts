@@ -749,6 +749,9 @@ class ChatStore {
 
 				// Auto-expand ctx och försök igen vid overflow (bara i Tauri, bara en gång)
 				if (contextInfo && !isRetry && (await this.tryAutoExpandContext(contextInfo))) {
+					// Stäng en ev. felruta som hunnit visas av en annan kodväg – retryn lyckas
+					// och får inte lämna kvar ett "Server Error" på skärmen.
+					this.showErrorDialog(null);
 					// Återskapa assistent-meddelandet och försök igen
 					const newAssistantMessage = await this.createAssistantMessage(
 						allMessages[allMessages.length - 1]?.id
@@ -796,6 +799,8 @@ class ChatStore {
 				)?.contextInfo;
 				if (agenticContextInfo) {
 					if (!isRetry && (await this.tryAutoExpandContext(agenticContextInfo))) {
+						// Stäng en ev. felruta som hunnit visas – retryn lyckas.
+						this.showErrorDialog(null);
 						const newAssistantMessage = await this.createAssistantMessage(
 							allMessages[allMessages.length - 1]?.id
 						);

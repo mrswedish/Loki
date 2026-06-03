@@ -53,6 +53,16 @@ export async function fetchServerUrl(): Promise<string | null> {
 	}
 }
 
+/**
+ * Diagnostik: skriv en rad till loki_diag.log (samma fil som server-livscykeln)
+ * så att frontend- och backend-händelser hamnar i samma tidslinje. No-op utanför Tauri.
+ * Får aldrig kasta – diagnostik ska inte påverka körningen.
+ */
+export function diagLog(msg: string): void {
+	if (!isTauriEnv()) return;
+	invoke<void>('diag_log_cmd', { msg }).catch(() => {});
+}
+
 /** Lista lokalt nedladdade GGUF-modeller */
 export async function listLocalModels(): Promise<ModelInfo[]> {
 	if (!isTauriEnv()) return [];
@@ -66,13 +76,19 @@ export async function listAvailableModels(): Promise<ModelStatus[]> {
 }
 
 /** Starta llama-server med vald modell. Returnerar server-URL. */
-export async function startServer(modelPath: string, contextSize?: number, gpuIndex?: number): Promise<string> {
+export async function startServer(
+	modelPath: string,
+	contextSize?: number,
+	gpuIndex?: number
+): Promise<string> {
+	diagLog(`startServer() called ctx=${contextSize}`);
 	const result = await invoke<{ url: string; fellBackToCpu: boolean }>('start_server', {
 		modelPath,
 		contextSize,
 		gpuIndex
 	});
 	setServerBase(result.url);
+	diagLog(`startServer() done url=${result.url}`);
 
 	// GPU misslyckades och vi körde om på CPU – informera diskret (en gång per start).
 	if (result.fellBackToCpu) {
@@ -159,9 +175,7 @@ export async function saveTextFile(content: string): Promise<string> {
 }
 
 /** Lyssna på nedladdningsprogress. Returnerar unlisten-funktion. */
-export async function onDownloadProgress(
-	cb: (p: DownloadProgress) => void
-): Promise<() => void> {
+export async function onDownloadProgress(cb: (p: DownloadProgress) => void): Promise<() => void> {
 	const { listen } = await import('@tauri-apps/api/event');
 	return listen<DownloadProgress>('download-progress', (e) => cb(e.payload));
 }

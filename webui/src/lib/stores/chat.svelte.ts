@@ -18,7 +18,7 @@ import { config } from '$lib/stores/settings.svelte';
 import { agenticStore } from '$lib/stores/agentic.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { contextSize, isRouterMode, serverStore } from '$lib/stores/server.svelte';
-import { startServer } from '$lib/tauri-bridge';
+import { startServer, diagLog } from '$lib/tauri-bridge';
 import { isTauriEnv } from '$lib/server-url';
 import { toast } from 'svelte-sonner';
 import {
@@ -557,6 +557,9 @@ class ChatStore {
 		const modelPath = serverStore.currentModelPath;
 		const gpuIndex = (config().gpuIndex as number) ?? -1;
 
+		diagLog(
+			`AUTO_EXPAND prompt=${contextInfo.n_prompt_tokens} cur_ctx=${contextInfo.n_ctx} new_ctx=${newCtx} hasPath=${!!modelPath}`
+		);
 		if (!modelPath || newCtx <= contextInfo.n_ctx) return false;
 
 		try {
@@ -565,6 +568,7 @@ class ChatStore {
 			await startServer(modelPath, newCtx, gpuIndex);
 			serverStore.currentModelPath = modelPath;
 			await serverStore.fetch();
+			diagLog('AUTO_EXPAND server restarted, retrying');
 			return true;
 		} catch (retryError) {
 			console.error('[chatStore] Auto-expand misslyckades:', retryError);

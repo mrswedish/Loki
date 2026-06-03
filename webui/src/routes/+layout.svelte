@@ -18,7 +18,12 @@
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
 	import { getServerBase, isTauriEnv, setServerBase } from '$lib/server-url';
-	import { fetchServerUrl, checkServerHealth, restartServerIfDead } from '$lib/tauri-bridge';
+	import {
+		fetchServerUrl,
+		checkServerHealth,
+		restartServerIfDead,
+		diagLog
+	} from '$lib/tauri-bridge';
 	import TauriModelSelector from '$lib/components/app/TauriModelSelector.svelte';
 	import { KeyboardKey, ColorMode } from '$lib/enums';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
@@ -166,15 +171,19 @@
 
 		const interval = setInterval(async () => {
 			try {
+				const streaming = isChatStreaming();
+				diagLog(`WATCHDOG tick streaming=${streaming}`);
 				// Hoppa över hälsokontrollen medan en chatt streamar/bearbetar. På långsam
 				// hårdvara (t.ex. AMD iGPU) kan prompt-processing av stora dokument ta flera
 				// minuter, under vilka /health inte hinner svara. Watchdogen skulle då döda
 				// den fullt friska, upptagna servern mitt i körningen → "Network error".
-				if (isChatStreaming()) return;
+				if (streaming) return;
 
 				const alive = await checkServerHealth();
+				diagLog(`WATCHDOG health alive=${alive}`);
 				if (!alive) {
 					console.warn('[layout] llama-server inte svarar – försöker starta om...');
+					diagLog('WATCHDOG restarting server (health=false)');
 					const newUrl = await restartServerIfDead();
 					if (newUrl) {
 						console.info('[layout] llama-server omstartad:', newUrl);

@@ -2,7 +2,6 @@ import { getJsonHeaders } from '$lib/utils/api-headers';
 import { formatAttachmentText } from '$lib/utils/formatters';
 import { isAbortError } from '$lib/utils/abort';
 import { getServerBase } from '$lib/server-url';
-import { diagLog } from '$lib/tauri-bridge';
 import {
 	AGENTIC_REGEX,
 	ATTACHMENT_LABEL_PDF_FILE,
@@ -262,25 +261,20 @@ export class ChatService {
 			}
 		}
 
-		const diagBase = getServerBase();
-		diagLog(`FETCH_START base=${diagBase} stream=${stream}`);
 		try {
-			const response = await fetch(`${diagBase}/v1/chat/completions`, {
+			const response = await fetch(`${getServerBase()}/v1/chat/completions`, {
 				method: 'POST',
 				headers: getJsonHeaders(),
 				body: JSON.stringify(requestBody),
 				signal
 			});
-			diagLog(`FETCH_RESP status=${response.status} ok=${response.ok}`);
 
 			if (!response.ok) {
-				const error = await ChatService.parseErrorResponse(response);
-
-				if (onError) {
-					onError(error);
-				}
-
-				throw error;
+				// Kasta bara – onError anropas EN gång i catch-blocket nedan. Att anropa
+				// onError här OCH i catch ledde till att felhanteraren (med auto-expand)
+				// kördes två gånger för samma overflow-fel → två parallella server-omstarter
+				// och retries, vilket fick felrutan att visas innan retryn hann stänga den.
+				throw await ChatService.parseErrorResponse(response);
 			}
 
 			if (stream) {
@@ -309,9 +303,6 @@ export class ChatService {
 				);
 			}
 		} catch (error) {
-			const eName = error instanceof Error ? error.name : typeof error;
-			const eMsg = error instanceof Error ? error.message : String(error);
-			diagLog(`FETCH_CATCH name=${eName} aborted=${isAbortError(error)} msg=${eMsg.slice(0, 120)}`);
 			if (isAbortError(error)) {
 				console.log('Chat completion request was aborted');
 				return;
@@ -448,15 +439,10 @@ export class ChatService {
 
 		try {
 			let chunk = '';
-			let firstRead = true;
 			while (true) {
 				if (abortSignal?.aborted) break;
 
 				const { done, value } = await reader.read();
-				if (firstRead) {
-					diagLog(`STREAM_FIRST_READ done=${done} bytes=${value?.length ?? 0}`);
-					firstRead = false;
-				}
 				if (done) break;
 
 				if (abortSignal?.aborted) break;
@@ -575,9 +561,6 @@ export class ChatService {
 			}
 		} catch (error) {
 			const err = error instanceof Error ? error : new Error('Stream error');
-			diagLog(
-				`STREAM_CATCH name=${err.name} aborted=${!!abortSignal?.aborted} finished=${streamFinished} msg=${err.message.slice(0, 120)}`
-			);
 
 			onError?.(err);
 

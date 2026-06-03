@@ -3,27 +3,7 @@ use std::path::PathBuf;
 use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
-/// Diagnostik: appendar en tidsstämplad rad till loki_diag.log i log_dir.
-/// Används för att felsöka server-livscykeln (start/kill/restart) i tidslinje
-/// tillsammans med frontend-händelser. Tyst no-op om log_dir saknas.
-pub fn diag_log(log_dir: &Option<PathBuf>, msg: &str) {
-	use std::io::Write;
-	let Some(dir) = log_dir else { return };
-	let ts = SystemTime::now()
-		.duration_since(UNIX_EPOCH)
-		.map(|d| d.as_millis())
-		.unwrap_or(0);
-	let line = format!("{} {}\n", ts, msg);
-	if let Ok(mut f) = std::fs::OpenOptions::new()
-		.create(true)
-		.append(true)
-		.open(dir.join("loki_diag.log"))
-	{
-		let _ = f.write_all(line.as_bytes());
-	}
-}
+use std::time::{Duration, Instant};
 
 pub struct InferenceEngine {
 	server_binary: Option<PathBuf>,
@@ -72,7 +52,6 @@ impl InferenceEngine {
 
 	fn kill_server(&mut self) {
 		if let Some(mut child) = self.server_process.take() {
-			diag_log(&self.log_dir, &format!("KILL_SERVER port={:?} ctx={:?}", self.port, self.ctx_size));
 			eprintln!("Killing llama-server process...");
 			let _ = child.kill();
 			let _ = child.wait();
@@ -83,10 +62,6 @@ impl InferenceEngine {
 	}
 
 	pub fn start(&mut self, path: &str, ctx_size: Option<u32>, gpu_index: Option<i32>, log_dir: Option<PathBuf>) -> Result<u16, String> {
-		diag_log(&log_dir, &format!(
-			"START_REQ ctx={:?} cur_ctx={:?} cur_port={:?} alive={}",
-			ctx_size, self.ctx_size, self.port, self.server_is_alive()
-		));
 		// Don't restart if same model already loaded and server alive – men bara om
 		// ctx_size och gpu_index är oförändrade. Auto-expand anropar start() med samma
 		// modell men STÖRRE ctx_size; då MÅSTE servern startas om, annars körs den vidare
@@ -96,7 +71,6 @@ impl InferenceEngine {
 			&& self.gpu_index == gpu_index
 			&& self.server_is_alive()
 		{
-			diag_log(&log_dir, "START_NOOP same model+ctx, server alive");
 			return Ok(self.port.unwrap());
 		}
 
@@ -144,7 +118,6 @@ impl InferenceEngine {
 		self.ctx_size = ctx_size;
 		self.gpu_index = gpu_index;
 		self.log_dir = log_dir;
-		diag_log(&self.log_dir, &format!("START_DONE port={} ctx={:?} cpu_fallback={}", port, ctx_size, self.fell_back_to_cpu));
 
 		Ok(port)
 	}
@@ -264,12 +237,9 @@ impl InferenceEngine {
 	/// Restarts the server if it is no longer alive, using the last-known parameters.
 	/// Returns `Ok(Some(new_url))` if restarted, `Ok(None)` if still alive or nothing to restart.
 	pub fn restart_if_dead(&mut self) -> Result<Option<String>, String> {
-		let alive = self.server_is_alive();
-		diag_log(&self.log_dir, &format!("RESTART_IF_DEAD_CHECK alive={} port={:?}", alive, self.port));
-		if alive {
+		if self.server_is_alive() {
 			return Ok(None);
 		}
-		diag_log(&self.log_dir, "RESTART_IF_DEAD restarting (server reported dead)");
 		let Some(model_path) = self.model_path.clone() else {
 			return Ok(None); // No model was loaded – nothing to restart
 		};

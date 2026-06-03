@@ -216,14 +216,6 @@ fn check_server_health(engine: tauri::State<'_, inference::SharedEngine>) -> boo
 	engine.lock().ok().map_or(false, |eng| eng.server_is_alive())
 }
 
-/// Diagnostik: låter frontend appenda en rad till loki_diag.log så att frontend-
-/// och server-händelser hamnar i samma tidslinje. Används för felsökning.
-#[tauri::command]
-fn diag_log_cmd(app: tauri::AppHandle, msg: String) {
-	let log_dir = app.path().app_log_dir().ok();
-	inference::diag_log(&log_dir, &format!("FE {}", msg));
-}
-
 /// If the server is dead but a model was previously loaded, restarts it.
 /// Returns the new server URL on restart, or null if already alive / nothing to restart.
 #[tauri::command]
@@ -270,7 +262,6 @@ pub fn run() {
 			stop_server,
 			get_server_url,
 			check_server_health,
-			diag_log_cmd,
 			restart_server_if_dead,
 			// System
 			get_system_info,

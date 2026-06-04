@@ -58,9 +58,10 @@ export const AGENTIC_REGEX = {
 	AGENTIC_TOOL_CALL_OPEN: /\n*<<<AGENTIC_TOOL_CALL_START>>>[\s\S]*$/,
 	// Matches tool name inside content
 	TOOL_NAME_EXTRACT: /<<<TOOL_NAME:([^>]+)>>>/,
-	// Matches raw <think>...</think> blocks (incl. empty ones) som vissa modeller
-	// (t.ex. Qwen3.5) läcker i content när thinking är av och reasoning_format=none.
-	THINK_BLOCK: /<think>[\s\S]*?<\/think>/g,
-	// Matches an unterminated opening <think> tag and any remaining content (streaming)
-	THINK_OPEN: /<think>[\s\S]*$/
+	// Matches raw <think>/<thinking>...</think>/</thinking> blocks (incl. empty ones)
+	// som vissa modeller (t.ex. Qwen3.5) läcker i content när thinking är av och
+	// reasoning_format=none. Båda taggvarianterna förekommer beroende på modell/mall.
+	THINK_BLOCK: /<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/g,
+	// Matches an unterminated opening think-tag and any remaining content (streaming)
+	THINK_OPEN: /<think(?:ing)?>[\s\S]*$/
 } as const;

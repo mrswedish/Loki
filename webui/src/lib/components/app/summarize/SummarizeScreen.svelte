@@ -76,11 +76,16 @@
 	}
 
 	async function onTranscriptPicked(e: Event) {
-		const file = (e.target as HTMLInputElement).files?.[0];
+		const input = e.target as HTMLInputElement;
+		const file = input.files?.[0];
+		// Nollställ värdet så att samma fil kan väljas igen (annars triggas inte onchange).
+		input.value = '';
 		if (file) await summarizeStore.loadTranscript(file);
 	}
 	async function onAgendaPicked(e: Event) {
-		const file = (e.target as HTMLInputElement).files?.[0];
+		const input = e.target as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
 		if (file) await summarizeStore.loadAgenda(file);
 	}
 

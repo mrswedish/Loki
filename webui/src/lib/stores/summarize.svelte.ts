@@ -72,6 +72,12 @@ class SummarizeStore {
 	private convId: string | null = null;
 	/** Db-id för assistant-meddelandet (uppdateras vid språkrättning). */
 	private resultMessageId: string | null = null;
+	/**
+	 * Modellsökväg som användes för sammanfattningen (t.ex. Qwen). Sparas så att vi
+	 * kan byta tillbaka till den om språkrättningen bytt servern till Gemma – annars
+	 * skulle nästa sammanfattning köras med fel modell.
+	 */
+	private summaryModelPath: string | null = null;
 
 	get busy(): boolean {
 		return this.state === 'reading' || this.state === 'preparing' || this.state === 'running';
@@ -160,10 +166,16 @@ class SummarizeStore {
 		this.error = null;
 		this.result = '';
 		this.refined = false;
-		this.resultModel = this.currentModelName();
 
 		const systemPrompt = buildSystemPrompt(template, this.agenda || undefined);
 		const margin = this.thorough ? RESPONSE_MARGIN_THINKING : RESPONSE_MARGIN;
+
+		// Säkerställ rätt sammanfattningsmodell. Om en tidigare körning språkrättades
+		// kör servern nu Gemma – byt då tillbaka till sammanfattningsmodellen så att
+		// nästa sammanfattning inte oavsiktligt körs med Gemma. Första körningen sparar
+		// den modell servern redan kör (användarens val).
+		await this.ensureSummaryModel();
+		this.resultModel = this.currentModelName();
 
 		// Proaktiv ctx: starta servern med exakt rätt storlek innan anropet.
 		await this.ensureContextFor(`${systemPrompt}\n\n${this.transcript}`, margin);
@@ -317,6 +329,31 @@ class SummarizeStore {
 			await DatabaseService.updateMessage(this.resultMessageId, { content: output });
 		} catch (e) {
 			console.warn('[summarize] kunde inte uppdatera historik:', e);
+		}
+	}
+
+	/**
+	 * Säkerställer att servern kör sammanfattningsmodellen (inte Gemma från ett
+	 * tidigare språkrättningssteg). Första körningen sparar användarens valda modell.
+	 */
+	private async ensureSummaryModel(): Promise<void> {
+		if (!isTauriEnv()) return;
+		const current = serverStore.currentModelPath;
+		// Första körningen: kom ihåg den modell servern redan kör (användarens val).
+		if (!this.summaryModelPath) {
+			this.summaryModelPath = current;
+			return;
+		}
+		// Servern kör en annan modell (t.ex. Gemma efter rättning) – byt tillbaka.
+		if (current !== this.summaryModelPath) {
+			try {
+				const gpuIndex = (config().gpuIndex as number) ?? -1;
+				await startServer(this.summaryModelPath, serverStore.contextSize ?? 4096, gpuIndex);
+				serverStore.currentModelPath = this.summaryModelPath;
+				await serverStore.fetch();
+			} catch (e) {
+				console.warn('[summarize] kunde inte byta tillbaka till sammanfattningsmodellen:', e);
+			}
 		}
 	}
 

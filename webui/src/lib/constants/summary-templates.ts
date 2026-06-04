@@ -34,8 +34,12 @@ const COMMON_PREAMBLE =
 	'Du är ett verktyg som bearbetar en transkribering av ett möte eller samtal. ' +
 	'Arbeta ENBART utifrån transkriberingens innehåll – hitta aldrig på fakta, namn, ' +
 	'beslut eller siffror som inte finns i texten. Svara på samma språk som ' +
-	'transkriberingen (oftast svenska). Skriv inga inledande eller avslutande ' +
-	'kommentarer om uppgiften – leverera bara det begärda dokumentet i Markdown.';
+	'transkriberingen (oftast svenska). ' +
+	'Var trogen källan: använd talarnas egna ord och termer. Byt INTE ut ord mot ' +
+	'synonymer, skriv inte om i onödan och använd inga metaforer, bildspråk eller ' +
+	'tolkande omskrivningar som kan förvränga vad som sades eller beslutades. ' +
+	'Skriv inga inledande eller avslutande kommentarer om uppgiften – leverera bara ' +
+	'det begärda dokumentet i Markdown.';
 
 export const SUMMARY_TEMPLATES: SummaryTemplate[] = [
 	{
@@ -108,8 +112,10 @@ export const LANGUAGE_REFINE_PROMPT =
 	'- Översätt kvarvarande engelska ord/uttryck till svenska.\n' +
 	'- Polera strukturen LÄTT för läsbarhet (rubriker, punktlistor), men ändra inte ordningen.\n' +
 	'VIKTIGT: Ändra ALDRIG innehållet. Lägg inte till, ta inte bort och tolka inte om fakta, ' +
-	'beslut, namn, siffror eller åtgärder. Behåll Markdown-formatet. Svara enbart med det ' +
-	'rättade dokumentet – inga kommentarer om vad du ändrat.';
+	'beslut, namn, siffror eller åtgärder. Byt INTE ut korrekta facktermer, egennamn eller ' +
+	'citat mot synonymer, och inför inga metaforer eller bildspråk. Rätta bara det som är ' +
+	'språkligt fel. Behåll Markdown-formatet. Svara enbart med det rättade dokumentet – inga ' +
+	'kommentarer om vad du ändrat.';
 
 /** Den mall som väljs som standard när vyn öppnas. */
 export const DEFAULT_TEMPLATE_ID = 'meeting-minutes';

@@ -93,7 +93,7 @@
 	}
 </script>
 
-<div class="mx-auto flex h-full w-full max-w-3xl flex-col gap-6 px-6 py-10">
+<div class="mx-auto flex h-full min-h-0 w-full max-w-3xl flex-col gap-6 overflow-hidden px-6 py-10">
 	{#if showResult}
 		<!-- Steg 3: resultatpanel. Protokollet streamas in här; knappar för att
 		förbättra svenskan (Gemma), kopiera, exportera och börja om. -->
@@ -124,9 +124,9 @@
 			</Button>
 		</div>
 
-		<div class="min-h-[200px] rounded-xl border border-border bg-card p-5">
+		<div class="min-h-0 flex-1 overflow-y-auto rounded-xl border border-border bg-card p-5">
 			{#if summarizeStore.result}
-				<div class="prose prose-sm dark:prose-invert max-w-none">
+				<div class="prose prose-sm dark:prose-invert max-w-none break-words">
 					<MarkdownContent content={summarizeStore.result} />
 				</div>
 			{:else}

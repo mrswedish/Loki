@@ -263,16 +263,20 @@ class SummarizeStore {
 		return final;
 	}
 
-	/** Sparar körningen som en konversation i historiken (transkribering + resultat). */
+	/**
+	 * Sparar körningen som en konversation i historiken (transkribering + resultat).
+	 * Använder DatabaseService direkt (INTE conversationsStore.createConversation, som
+	 * navigerar till /chat/[id]) så att vi stannar kvar i sammanfattningsvyn.
+	 */
 	private async saveToHistory(output: string): Promise<void> {
 		try {
 			const title = this.meetingName.trim() || 'Sammanfattning';
-			const conv = await conversationsStore.createConversation(title);
-			this.convId = conv;
-			const rootId = await DatabaseService.createRootMessage(conv);
+			const conv = await DatabaseService.createConversation(title);
+			this.convId = conv.id;
+			const rootId = await DatabaseService.createRootMessage(conv.id);
 			const userMsg = await DatabaseService.createMessageBranch(
 				{
-					convId: conv,
+					convId: conv.id,
 					role: MessageRole.USER,
 					content: this.transcript,
 					type: MessageType.TEXT,
@@ -285,7 +289,7 @@ class SummarizeStore {
 			);
 			const assistantMsg = await DatabaseService.createMessageBranch(
 				{
-					convId: conv,
+					convId: conv.id,
 					role: MessageRole.ASSISTANT,
 					content: output,
 					type: MessageType.TEXT,
@@ -297,6 +301,10 @@ class SummarizeStore {
 				userMsg.id
 			);
 			this.resultMessageId = assistantMsg.id;
+			// Peka konversationens currNode på resultatet så den öppnas korrekt från historiken.
+			await DatabaseService.updateConversation(conv.id, { currNode: assistantMsg.id });
+			// Uppdatera sidofältet utan att navigera.
+			await conversationsStore.loadConversations();
 		} catch (e) {
 			console.warn('[summarize] kunde inte spara i historik:', e);
 		}

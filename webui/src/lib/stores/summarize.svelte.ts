@@ -1,4 +1,5 @@
 import { chatStore } from '$lib/stores/chat.svelte';
+import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { settingsStore, config } from '$lib/stores/settings.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 import { isTauriEnv } from '$lib/server-url';
@@ -42,6 +43,8 @@ class SummarizeStore {
 	transcript = $state<string>('');
 	/** Inläst agendatext (valfri). */
 	agenda = $state<string>('');
+	/** Namn på mötet – blir konversationens titel i historiken. */
+	meetingName = $state<string>('');
 
 	info = $state<TranscriptInfo | null>(null);
 
@@ -55,6 +58,7 @@ class SummarizeStore {
 		this.error = null;
 		this.transcript = '';
 		this.agenda = '';
+		this.meetingName = '';
 		this.info = null;
 	}
 
@@ -72,6 +76,8 @@ class SummarizeStore {
 				throw new Error('Filen verkar tom eller kunde inte läsas som text.');
 			}
 			this.transcript = text;
+			// Förifyll mötesnamn med filnamnet utan ändelse – användaren kan ändra.
+			this.meetingName = file.name.replace(/\.[^.]+$/, '').trim();
 
 			// Räkna tokens proaktivt (kräver att servern är igång). Faller tillbaka
 			// till teckenbaserad uppskattning om /tokenize inte är tillgänglig.
@@ -161,10 +167,15 @@ class SummarizeStore {
 		// Kör via chatt-motorn. Sätt mallens system-prompt temporärt (sendMessage
 		// läser config().systemMessage synkront vid ny konversation) och återställ.
 		const previousSystem = config().systemMessage;
+		const title = this.meetingName.trim();
 		try {
 			this.state = 'running';
 			settingsStore.updateConfig('systemMessage', systemPrompt);
 			await chatStore.sendMessage(this.transcript);
+			// sendMessage döper konversationen efter första meningen i transkriberingen.
+			// Skriv över med användarens mötesnamn så historiken blir lätt att överblicka.
+			const convId = conversationsStore.activeConversation?.id;
+			if (convId && title) await conversationsStore.updateConversationName(convId, title);
 			this.state = 'idle';
 		} catch (e) {
 			this.state = 'error';

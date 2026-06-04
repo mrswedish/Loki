@@ -3,6 +3,8 @@
 	import { DEFAULT_TEMPLATE_ID } from '$lib/constants/summary-templates';
 	import TemplatePicker from './TemplatePicker.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
+	import { Label } from '$lib/components/ui/label';
 	import { cn } from '$lib/components/ui/utils';
 	import { FileText, FileUp, Paperclip, X, Sparkles, Settings2, Loader2 } from '@lucide/svelte';
 
@@ -19,7 +21,7 @@
 	function handleDragEnter(e: DragEvent) {
 		e.preventDefault();
 		dragCounter++;
-		isDragOver = true;
+		if (e.dataTransfer?.types.includes('Files')) isDragOver = true;
 	}
 	function handleDragLeave(e: DragEvent) {
 		e.preventDefault();
@@ -57,15 +59,20 @@
 
 <div class="mx-auto flex h-full w-full max-w-3xl flex-col gap-6 px-6 py-10">
 	{#if !info}
-		<!-- Steg 1: drop-zon-först. Lugn, tom startskärm. -->
-		<div class="flex flex-1 flex-col items-center justify-center">
+		<!-- Steg 1: drop-zon-först. Lugn, tom startskärm. Drag-handlers på en
+		container-div (samma mönster som ChatScreen), klick hanteras av knappen inuti. -->
+		<div
+			class="flex flex-1 flex-col items-center justify-center"
+			role="region"
+			aria-label="Släppyta för transkribering"
+			ondragenter={handleDragEnter}
+			ondragleave={handleDragLeave}
+			ondragover={handleDragOver}
+			ondrop={handleDrop}
+		>
 			<button
 				type="button"
 				onclick={() => transcriptInput.click()}
-				ondragenter={handleDragEnter}
-				ondragleave={handleDragLeave}
-				ondragover={handleDragOver}
-				ondrop={handleDrop}
 				class={cn(
 					'flex w-full flex-col items-center justify-center gap-4 rounded-2xl border-2 border-dashed px-8 py-20 transition-all',
 					isDragOver
@@ -117,6 +124,17 @@
 			<Button variant="ghost" size="icon" onclick={() => summarizeStore.reset()} disabled={busy}>
 				<X class="size-4" />
 			</Button>
+		</div>
+
+		<!-- Mötesnamn → konversationstitel i historiken -->
+		<div class="space-y-1.5">
+			<Label for="meeting-name" class="text-sm font-medium">Namn på mötet</Label>
+			<Input
+				id="meeting-name"
+				bind:value={summarizeStore.meetingName}
+				placeholder="t.ex. Styrelsemöte 4 juni"
+				disabled={busy}
+			/>
 		</div>
 
 		<div class="space-y-3">

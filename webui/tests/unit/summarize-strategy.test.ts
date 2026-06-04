@@ -5,7 +5,8 @@ import {
 	splitIntoChunks,
 	buildSystemPrompt,
 	MAX_CTX,
-	RESPONSE_MARGIN
+	RESPONSE_MARGIN,
+	RESPONSE_MARGIN_THINKING
 } from '$lib/services/summarize.service';
 import type { SummaryTemplate } from '$lib/constants/summary-templates';
 
@@ -50,6 +51,13 @@ describe('pickStrategy', () => {
 		const d = pickStrategy(1000);
 		expect(d.strategy).toBe('single');
 		expect(d.ctx).toBe(roundCtx(1000 + RESPONSE_MARGIN));
+	});
+
+	it('reserverar större ctx när thinking-marginal anges', () => {
+		const normal = pickStrategy(20_000, 131_072, RESPONSE_MARGIN);
+		const thinking = pickStrategy(20_000, 131_072, RESPONSE_MARGIN_THINKING);
+		expect(thinking.ctx).toBeGreaterThan(normal.ctx);
+		expect(thinking.ctx).toBe(roundCtx(20_000 + RESPONSE_MARGIN_THINKING));
 	});
 });
 

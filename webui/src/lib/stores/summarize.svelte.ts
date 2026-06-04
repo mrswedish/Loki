@@ -5,7 +5,13 @@ import { serverStore } from '$lib/stores/server.svelte';
 import { isTauriEnv } from '$lib/server-url';
 import { startServer } from '$lib/tauri-bridge';
 import { processFilesToChatUploaded } from '$lib/utils/process-uploaded-files';
-import { countTokens, pickStrategy, buildSystemPrompt } from '$lib/services/summarize.service';
+import {
+	countTokens,
+	pickStrategy,
+	buildSystemPrompt,
+	RESPONSE_MARGIN,
+	RESPONSE_MARGIN_THINKING
+} from '$lib/services/summarize.service';
 import { getBuiltinTemplate, type SummaryTemplate } from '$lib/constants/summary-templates';
 import { toast } from 'svelte-sonner';
 
@@ -45,6 +51,12 @@ class SummarizeStore {
 	agenda = $state<string>('');
 	/** Namn på mötet – blir konversationens titel i historiken. */
 	meetingName = $state<string>('');
+	/**
+	 * "Noggrannare": låt modellen resonera (thinking) innan svaret. Av som standard
+	 * – thinking-modeller (t.ex. Qwen3.5) kan annars förbruka hela kontexten på
+	 * resonemang och aldrig nå svaret. När på reserveras större ctx-marginal.
+	 */
+	thorough = $state<boolean>(false);
 
 	info = $state<TranscriptInfo | null>(null);
 
@@ -89,7 +101,8 @@ class SummarizeStore {
 			}
 
 			const modelMax = serverStore.contextSize ?? undefined;
-			const { strategy } = pickStrategy(tokens, modelMax ?? undefined);
+			const margin = this.thorough ? RESPONSE_MARGIN_THINKING : RESPONSE_MARGIN;
+			const { strategy } = pickStrategy(tokens, modelMax ?? undefined, margin);
 
 			this.info = {
 				fileName: file.name,
@@ -144,12 +157,15 @@ class SummarizeStore {
 
 		const systemPrompt = buildSystemPrompt(template, this.agenda || undefined);
 
+		// Marginal beror på om thinking är på: resonemanget förbrukar kontext.
+		const margin = this.thorough ? RESPONSE_MARGIN_THINKING : RESPONSE_MARGIN;
+
 		// Proaktiv ctx: starta servern med exakt rätt storlek innan anropet (bara
 		// i Tauri och bara för single-strategin). Då slipper vi overflow + omstart.
 		try {
 			if (isTauriEnv() && this.info.strategy === 'single') {
 				const promptTokens = await this.tokensWithPrompt(systemPrompt);
-				const { ctx } = pickStrategy(promptTokens, serverStore.contextSize ?? undefined);
+				const { ctx } = pickStrategy(promptTokens, serverStore.contextSize ?? undefined, margin);
 				const modelPath = serverStore.currentModelPath;
 				const gpuIndex = (config().gpuIndex as number) ?? -1;
 				if (modelPath && ctx > (serverStore.contextSize ?? 0)) {
@@ -164,18 +180,20 @@ class SummarizeStore {
 			console.warn('[summarize] proaktiv ctx-sizing misslyckades:', e);
 		}
 
-		// Kör via chatt-motorn. Sätt mallens system-prompt OCH stäng av thinking
+		// Kör via chatt-motorn. Sätt mallens system-prompt OCH thinking-läge
 		// temporärt (sendMessage läser config synkront vid ny konversation) och återställ.
 		//
-		// Thinking måste vara AV för sammanfattning: thinking-modeller (t.ex. Qwen3.5)
-		// kan annars förbruka hela kontexten på resonemang och aldrig nå svaret.
+		// Thinking är AV som standard för sammanfattning: thinking-modeller (t.ex.
+		// Qwen3.5) kan annars förbruka hela kontexten på resonemang och aldrig nå
+		// svaret. Användaren kan slå på "Noggrannare" (thorough) – då tänker modellen
+		// och vi har redan reserverat större ctx-marginal ovan.
 		const previousSystem = config().systemMessage;
 		const previousThinking = config().enableThinking;
 		const title = this.meetingName.trim();
 		try {
 			this.state = 'running';
 			settingsStore.updateConfig('systemMessage', systemPrompt);
-			settingsStore.updateConfig('enableThinking', false);
+			settingsStore.updateConfig('enableThinking', this.thorough);
 			await chatStore.sendMessage(this.transcript);
 			this.state = 'idle';
 		} catch (e) {

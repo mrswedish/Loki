@@ -5,6 +5,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Switch } from '$lib/components/ui/switch';
 	import { cn } from '$lib/components/ui/utils';
 	import { FileText, FileUp, Paperclip, X, Sparkles, Settings2, Loader2 } from '@lucide/svelte';
 
@@ -183,6 +184,14 @@
 					Skapa
 				{/if}
 			</Button>
+
+			<!-- Noggrannare = låt modellen resonera (thinking). Av som standard. -->
+			<div class="flex items-center gap-2">
+				<Switch id="thorough" bind:checked={summarizeStore.thorough} disabled={busy} />
+				<Label for="thorough" class="cursor-pointer text-sm text-muted-foreground">
+					Noggrannare
+				</Label>
+			</div>
 		</div>
 	{/if}
 

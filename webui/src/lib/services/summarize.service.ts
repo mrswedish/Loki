@@ -18,8 +18,15 @@ import type { SummaryTemplate } from '$lib/constants/summary-templates';
 /** Hårt tak för kontextfönstret – matchar auto-expand-logiken i chat-storen. */
 export const MAX_CTX = 131_072;
 
-/** Marginal i tokens reserverad för modellens svar utöver prompten. */
+/** Marginal i tokens reserverad för modellens svar utöver prompten (thinking av). */
 export const RESPONSE_MARGIN = 2048;
+
+/**
+ * Marginal när thinking är på ("Noggrannare"). Resonemanget skrivs ut före svaret
+ * och förbrukar kontext, så vi reserverar rejält extra utrymme så att modellen
+ * hinner både tänka och svara utan att slå i taket.
+ */
+export const RESPONSE_MARGIN_THINKING = 10_240;
 
 /** llama.cpp /tokenize-svar. */
 interface TokenizeResponse {
@@ -77,6 +84,8 @@ export function roundCtx(tokens: number): number {
  *
  * @param promptTokens  Antal tokens i hela prompten (system + transkribering).
  * @param modelMaxCtx   Modellens maximala kontext (n_ctx_train), default MAX_CTX.
+ * @param responseMargin  Tokens att reservera för svar (+ ev. resonemang). När
+ *                        thinking är på, skicka RESPONSE_MARGIN_THINKING.
  * @returns strategi + ctx att starta servern med.
  *
  * Ryms prompten + svarsmarginal inom modellens fönster (och taket) → "single"
@@ -84,10 +93,11 @@ export function roundCtx(tokens: number): number {
  */
 export function pickStrategy(
 	promptTokens: number,
-	modelMaxCtx: number = MAX_CTX
+	modelMaxCtx: number = MAX_CTX,
+	responseMargin: number = RESPONSE_MARGIN
 ): StrategyDecision {
 	const ceiling = Math.min(modelMaxCtx, MAX_CTX);
-	const needed = roundCtx(promptTokens + RESPONSE_MARGIN);
+	const needed = roundCtx(promptTokens + responseMargin);
 
 	if (needed <= ceiling) {
 		return { strategy: 'single', ctx: needed };

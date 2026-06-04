@@ -55,7 +55,7 @@ cargo test
 
 **Databas:** Dexie (IndexedDB), schema i `database.service.ts` – tabeller `conversations` och `messages`.
 
-**Routing:** SvelteKit – enda väsentliga route är `routes/chat/`.
+**Routing:** SvelteKit. `routes/+page.svelte` = **sammanfattningsläget** (Loki 2.0 startvy, `SummarizeScreen`). `routes/chat/+page.svelte` = avancerat läge (full chatt-startvy). `routes/chat/[id]/` = enskild konversation. "Ny chatt"-navigering pekar på `/chat`; logotypen/startsidan pekar på `/`.
 
 ### Backend (`src-tauri/src/`)
 

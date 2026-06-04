@@ -95,6 +95,22 @@ export const SUMMARY_TEMPLATES: SummaryTemplate[] = [
 	}
 ];
 
+/**
+ * Prompt för språkrättningssteget (Gemma 4 E2B). Körs på ett färdigt protokoll
+ * för att rätta svenskan och polera strukturen LÄTT – utan att skriva om eller
+ * lägga till innehåll. Bevarar alla fakta, beslut, namn och punkter exakt.
+ */
+export const LANGUAGE_REFINE_PROMPT =
+	'Du är en svensk språkgranskare. Du får ett mötesprotokoll eller en sammanfattning ' +
+	'som kan innehålla språkfel, engelska ord (svengelska) eller stela formuleringar. ' +
+	'Din uppgift:\n' +
+	'- Rätta stavning, grammatik och osvensk meningsbyggnad till korrekt, naturlig svenska.\n' +
+	'- Översätt kvarvarande engelska ord/uttryck till svenska.\n' +
+	'- Polera strukturen LÄTT för läsbarhet (rubriker, punktlistor), men ändra inte ordningen.\n' +
+	'VIKTIGT: Ändra ALDRIG innehållet. Lägg inte till, ta inte bort och tolka inte om fakta, ' +
+	'beslut, namn, siffror eller åtgärder. Behåll Markdown-formatet. Svara enbart med det ' +
+	'rättade dokumentet – inga kommentarer om vad du ändrat.';
+
 /** Den mall som väljs som standard när vyn öppnas. */
 export const DEFAULT_TEMPLATE_ID = 'meeting-minutes';
 

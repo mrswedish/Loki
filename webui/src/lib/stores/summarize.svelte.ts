@@ -1,10 +1,11 @@
-import { chatStore } from '$lib/stores/chat.svelte';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
-import { settingsStore, config } from '$lib/stores/settings.svelte';
+import { config } from '$lib/stores/settings.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 import { isTauriEnv } from '$lib/server-url';
-import { startServer } from '$lib/tauri-bridge';
+import { startServer, listAvailableModels, listLocalModels } from '$lib/tauri-bridge';
 import { processFilesToChatUploaded } from '$lib/utils/process-uploaded-files';
+import { ChatService } from '$lib/services/chat.service';
+import { DatabaseService } from '$lib/services/database.service';
 import {
 	countTokens,
 	pickStrategy,
@@ -12,87 +13,96 @@ import {
 	RESPONSE_MARGIN,
 	RESPONSE_MARGIN_THINKING
 } from '$lib/services/summarize.service';
+import { LANGUAGE_REFINE_PROMPT } from '$lib/constants/summary-templates';
 import { getBuiltinTemplate, type SummaryTemplate } from '$lib/constants/summary-templates';
+import { MessageRole, MessageType } from '$lib/enums';
+import type { ApiChatMessageData } from '$lib/types/api';
 import { toast } from 'svelte-sonner';
 
 /**
  * SummarizeStore – orkestrerar Loki 2.0 sammanfattningsläget.
  *
- * Tunt lager ovanpå den befintliga chatt-motorn (chatStore.sendMessage). Det
- * läser den uppladdade transkriberingen, räknar tokens proaktivt, startar om
- * servern med exakt rätt kontextstorlek (undviker overflow), bygger system-
- * prompten från vald mall + valfri agenda, och kör sammanfattningen. Resultatet
- * visas och sparas av chatt-motorn (navigerar till /chat/[id]).
+ * Läser transkriberingen, räknar tokens proaktivt, startar servern med exakt rätt
+ * kontext, och streamar sammanfattningen DIREKT via ChatService till egen state
+ * (resultatpanelen i sammanfattningsvyn). Sparar resultatet i historiken (Dexie).
  *
- * Steg 1 stödjer "single"-strategin. Chunkad map-reduce (för texter större än
- * modellens kontext) hanteras separat i ett senare steg.
+ * Två-modell-pipeline: efter Qwen-sammanfattningen kan användaren välja att
+ * "Förbättra svenskan" – då byts servern till Gemma 4 E2B som språkrättar och
+ * lätt polerar resultatet (utan att skriva om innehållet).
  */
 
-export type SummarizeState = 'idle' | 'reading' | 'preparing' | 'running' | 'error';
+export type SummarizeState = 'idle' | 'reading' | 'preparing' | 'running' | 'done' | 'error';
+
+/** Vilket steg i pipelinen som körs (för UI-text). */
+export type SummarizePhase = 'summarizing' | 'refining' | null;
 
 /** Uppskattning som visas för användaren innan körning. */
 export interface TranscriptInfo {
 	fileName: string;
 	chars: number;
 	tokens: number;
-	/** Strategin som kommer användas. */
 	strategy: 'single' | 'chunked';
-	/** Grov uppskattning av taltid i minuter (≈ tokens / 150 ord-per-min / ~1.3 tokens-per-ord). */
+	/** Grov uppskattning av taltid i minuter. */
 	approxMinutes: number;
 }
 
+/** Gemma-modellens id i registret – används för språkrättningssteget. */
+const REFINE_MODEL_ID = 'gemma-4-e2b';
+
 class SummarizeStore {
 	state = $state<SummarizeState>('idle');
+	phase = $state<SummarizePhase>(null);
 	error = $state<string | null>(null);
 
-	/** Inläst transkriberingstext. */
 	transcript = $state<string>('');
-	/** Inläst agendatext (valfri). */
 	agenda = $state<string>('');
-	/** Namn på mötet – blir konversationens titel i historiken. */
 	meetingName = $state<string>('');
-	/**
-	 * "Noggrannare": låt modellen resonera (thinking) innan svaret. Av som standard
-	 * – thinking-modeller (t.ex. Qwen3.5) kan annars förbruka hela kontexten på
-	 * resonemang och aldrig nå svaret. När på reserveras större ctx-marginal.
-	 */
+	/** "Noggrannare": thinking på (av som standard). När på reserveras större ctx. */
 	thorough = $state<boolean>(false);
 
 	info = $state<TranscriptInfo | null>(null);
 
-	/** True medan en sammanfattning förbereds/körs. */
+	/** Streamande/färdigt resultat (markdown). */
+	result = $state<string>('');
+	/** Namn på modellen som producerade nuvarande result (visas i UI). */
+	resultModel = $state<string>('');
+	/** True om resultatet redan språkrättats (döljer knappen). */
+	refined = $state<boolean>(false);
+	/** Konversations-id i historiken för denna körning. */
+	private convId: string | null = null;
+	/** Db-id för assistant-meddelandet (uppdateras vid språkrättning). */
+	private resultMessageId: string | null = null;
+
 	get busy(): boolean {
 		return this.state === 'reading' || this.state === 'preparing' || this.state === 'running';
 	}
 
 	reset(): void {
 		this.state = 'idle';
+		this.phase = null;
 		this.error = null;
 		this.transcript = '';
 		this.agenda = '';
 		this.meetingName = '';
 		this.info = null;
+		this.result = '';
+		this.resultModel = '';
+		this.refined = false;
+		this.convId = null;
+		this.resultMessageId = null;
 	}
 
-	/**
-	 * Läser en uppladdad transkriberingsfil (.txt/.pdf) till text, räknar tokens
-	 * och beräknar en uppskattning som visas innan körning.
-	 */
+	/** Läser en transkriberingsfil, räknar tokens och beräknar uppskattning. */
 	async loadTranscript(file: File): Promise<void> {
 		this.state = 'reading';
 		this.error = null;
 		try {
 			const [uploaded] = await processFilesToChatUploaded([file]);
 			const text = uploaded?.textContent?.trim() ?? '';
-			if (!text) {
-				throw new Error('Filen verkar tom eller kunde inte läsas som text.');
-			}
+			if (!text) throw new Error('Filen verkar tom eller kunde inte läsas som text.');
 			this.transcript = text;
-			// Förifyll mötesnamn med filnamnet utan ändelse – användaren kan ändra.
 			this.meetingName = file.name.replace(/\.[^.]+$/, '').trim();
 
-			// Räkna tokens proaktivt (kräver att servern är igång). Faller tillbaka
-			// till teckenbaserad uppskattning om /tokenize inte är tillgänglig.
 			let tokens: number;
 			try {
 				tokens = await countTokens(text);
@@ -100,9 +110,8 @@ class SummarizeStore {
 				tokens = Math.ceil(text.length / 4);
 			}
 
-			const modelMax = serverStore.contextSize ?? undefined;
 			const margin = this.thorough ? RESPONSE_MARGIN_THINKING : RESPONSE_MARGIN;
-			const { strategy } = pickStrategy(tokens, modelMax ?? undefined, margin);
+			const { strategy } = pickStrategy(tokens, serverStore.contextSize ?? undefined, margin);
 
 			this.info = {
 				fileName: file.name,
@@ -119,7 +128,7 @@ class SummarizeStore {
 		}
 	}
 
-	/** Läser en valfri agendafil (.txt/.pdf) till text. */
+	/** Läser en valfri agendafil. */
 	async loadAgenda(file: File): Promise<void> {
 		try {
 			const [uploaded] = await processFilesToChatUploaded([file]);
@@ -134,13 +143,7 @@ class SummarizeStore {
 		this.agenda = '';
 	}
 
-	/**
-	 * Kör sammanfattningen med vald mall. Sätter rätt kontext proaktivt och
-	 * kör via chatt-motorn (som visar och sparar resultatet).
-	 *
-	 * @param templateId  Id för vald mall (inbyggd eller egen via customTemplate).
-	 * @param customTemplate  En egen mall som inte finns i registret (valfri).
-	 */
+	/** Kör sammanfattningen med vald mall och streamar resultatet till `result`. */
 	async run(templateId: string, customTemplate?: SummaryTemplate): Promise<void> {
 		if (!this.transcript || !this.info) {
 			toast.error('Ladda upp en transkribering först.');
@@ -153,73 +156,205 @@ class SummarizeStore {
 		}
 
 		this.state = 'preparing';
+		this.phase = 'summarizing';
 		this.error = null;
+		this.result = '';
+		this.refined = false;
+		this.resultModel = this.currentModelName();
 
 		const systemPrompt = buildSystemPrompt(template, this.agenda || undefined);
-
-		// Marginal beror på om thinking är på: resonemanget förbrukar kontext.
 		const margin = this.thorough ? RESPONSE_MARGIN_THINKING : RESPONSE_MARGIN;
 
-		// Proaktiv ctx: starta servern med exakt rätt storlek innan anropet (bara
-		// i Tauri och bara för single-strategin). Då slipper vi overflow + omstart.
-		try {
-			if (isTauriEnv() && this.info.strategy === 'single') {
-				const promptTokens = await this.tokensWithPrompt(systemPrompt);
-				const { ctx } = pickStrategy(promptTokens, serverStore.contextSize ?? undefined, margin);
-				const modelPath = serverStore.currentModelPath;
-				const gpuIndex = (config().gpuIndex as number) ?? -1;
-				if (modelPath && ctx > (serverStore.contextSize ?? 0)) {
-					await startServer(modelPath, ctx, gpuIndex);
-					serverStore.currentModelPath = modelPath;
-					await serverStore.fetch();
-				}
-			}
-		} catch (e) {
-			// Proaktiv sizing är en optimering – misslyckas den faller vi tillbaka
-			// på chatt-motorns reaktiva auto-expand. Logga och fortsätt.
-			console.warn('[summarize] proaktiv ctx-sizing misslyckades:', e);
-		}
+		// Proaktiv ctx: starta servern med exakt rätt storlek innan anropet.
+		await this.ensureContextFor(`${systemPrompt}\n\n${this.transcript}`, margin);
 
-		// Kör via chatt-motorn. Sätt mallens system-prompt OCH thinking-läge
-		// temporärt (sendMessage läser config synkront vid ny konversation) och återställ.
-		//
-		// Thinking är AV som standard för sammanfattning: thinking-modeller (t.ex.
-		// Qwen3.5) kan annars förbruka hela kontexten på resonemang och aldrig nå
-		// svaret. Användaren kan slå på "Noggrannare" (thorough) – då tänker modellen
-		// och vi har redan reserverat större ctx-marginal ovan.
-		const previousSystem = config().systemMessage;
-		const previousThinking = config().enableThinking;
-		const title = this.meetingName.trim();
+		const messages: ApiChatMessageData[] = [
+			{ role: MessageRole.SYSTEM, content: systemPrompt },
+			{ role: MessageRole.USER, content: this.transcript }
+		];
+
 		try {
 			this.state = 'running';
-			settingsStore.updateConfig('systemMessage', systemPrompt);
-			settingsStore.updateConfig('enableThinking', this.thorough);
-			await chatStore.sendMessage(this.transcript);
-			this.state = 'idle';
+			const output = await this.stream(messages, { enableThinking: this.thorough });
+			await this.saveToHistory(output);
+			this.state = 'done';
 		} catch (e) {
 			this.state = 'error';
 			this.error = e instanceof Error ? e.message : 'Sammanfattningen misslyckades.';
 			toast.error(this.error);
 		} finally {
-			settingsStore.updateConfig('systemMessage', previousSystem);
-			settingsStore.updateConfig('enableThinking', previousThinking);
-			// sendMessage döper konversationen efter första meningen i transkriberingen.
-			// Skriv över med användarens mötesnamn – i finally så titeln sätts även om
-			// körningen avbryts efter att konversationen skapats.
-			const convId = conversationsStore.activeConversation?.id;
-			if (convId && title) {
-				await conversationsStore.updateConversationName(convId, title).catch(() => {});
-			}
+			this.phase = null;
 		}
 	}
 
-	/** Räknar tokens för system-prompt + transkribering (för proaktiv ctx). */
-	private async tokensWithPrompt(systemPrompt: string): Promise<number> {
+	/**
+	 * Språkrättar nuvarande resultat med Gemma 4 E2B (bäst på svenska). Byter
+	 * server till Gemma, kör en rättnings-prompt på resultattexten (kort input →
+	 * snabbt), och ersätter resultatet med den rättade versionen.
+	 */
+	async refineLanguage(): Promise<void> {
+		if (!this.result.trim() || this.busy) return;
+		const original = this.result;
+
+		this.state = 'running';
+		this.phase = 'refining';
+		this.error = null;
+
 		try {
-			return await countTokens(`${systemPrompt}\n\n${this.transcript}`);
-		} catch {
-			return Math.ceil((systemPrompt.length + this.transcript.length) / 4);
+			// Byt till Gemma (om vi inte redan kör den) innan rättningen.
+			if (isTauriEnv()) {
+				const gemmaPath = await this.resolveModelPath(REFINE_MODEL_ID);
+				if (gemmaPath && gemmaPath !== serverStore.currentModelPath) {
+					const gpuIndex = (config().gpuIndex as number) ?? -1;
+					await startServer(gemmaPath, serverStore.contextSize ?? 4096, gpuIndex);
+					serverStore.currentModelPath = gemmaPath;
+					await serverStore.fetch();
+				}
+				// Rättningen läser bara det korta protokollet – säkra ctx för det.
+				await this.ensureContextFor(`${LANGUAGE_REFINE_PROMPT}\n\n${original}`, RESPONSE_MARGIN);
+			}
+
+			this.result = '';
+			this.resultModel = 'Gemma 4 E2B';
+			const messages: ApiChatMessageData[] = [
+				{ role: MessageRole.SYSTEM, content: LANGUAGE_REFINE_PROMPT },
+				{ role: MessageRole.USER, content: original }
+			];
+			// Gemma är ingen thinking-modell – kör utan.
+			const refined = await this.stream(messages, { enableThinking: false });
+			this.refined = true;
+			await this.updateHistory(refined);
+			this.state = 'done';
+		} catch (e) {
+			// Återställ originalet om rättningen misslyckas.
+			this.result = original;
+			this.state = 'done';
+			this.error = e instanceof Error ? e.message : 'Språkrättningen misslyckades.';
+			toast.error(this.error);
+		} finally {
+			this.phase = null;
 		}
+	}
+
+	/**
+	 * Streamar en chat completion till `this.result` och returnerar full text.
+	 * Strippar råa think-taggar löpande (vissa modeller läcker dem).
+	 */
+	private async stream(
+		messages: ApiChatMessageData[],
+		opts: { enableThinking: boolean }
+	): Promise<string> {
+		let acc = '';
+		await ChatService.sendMessage(messages, {
+			stream: true,
+			enableThinking: opts.enableThinking,
+			temperature: 0.3,
+			max_tokens: -1,
+			onChunk: (chunk: string) => {
+				acc += chunk;
+				this.result = ChatService.stripRawThinkTags(acc);
+			},
+			onError: (err: Error) => {
+				throw err;
+			}
+		});
+		const final = ChatService.stripRawThinkTags(acc).trim();
+		this.result = final;
+		return final;
+	}
+
+	/** Sparar körningen som en konversation i historiken (transkribering + resultat). */
+	private async saveToHistory(output: string): Promise<void> {
+		try {
+			const title = this.meetingName.trim() || 'Sammanfattning';
+			const conv = await conversationsStore.createConversation(title);
+			this.convId = conv;
+			const rootId = await DatabaseService.createRootMessage(conv);
+			const userMsg = await DatabaseService.createMessageBranch(
+				{
+					convId: conv,
+					role: MessageRole.USER,
+					content: this.transcript,
+					type: MessageType.TEXT,
+					timestamp: Date.now(),
+					toolCalls: '',
+					children: [],
+					extra: undefined
+				},
+				rootId
+			);
+			const assistantMsg = await DatabaseService.createMessageBranch(
+				{
+					convId: conv,
+					role: MessageRole.ASSISTANT,
+					content: output,
+					type: MessageType.TEXT,
+					timestamp: Date.now(),
+					toolCalls: '',
+					children: [],
+					extra: undefined
+				},
+				userMsg.id
+			);
+			this.resultMessageId = assistantMsg.id;
+		} catch (e) {
+			console.warn('[summarize] kunde inte spara i historik:', e);
+		}
+	}
+
+	/** Uppdaterar det sparade resultatmeddelandet (efter språkrättning). */
+	private async updateHistory(output: string): Promise<void> {
+		if (!this.resultMessageId) return;
+		try {
+			await DatabaseService.updateMessage(this.resultMessageId, { content: output });
+		} catch (e) {
+			console.warn('[summarize] kunde inte uppdatera historik:', e);
+		}
+	}
+
+	/** Säkrar att servern kör med tillräcklig kontext för en given prompt-text. */
+	private async ensureContextFor(promptText: string, margin: number): Promise<void> {
+		if (!isTauriEnv() || this.info?.strategy === 'chunked') return;
+		try {
+			let promptTokens: number;
+			try {
+				promptTokens = await countTokens(promptText);
+			} catch {
+				promptTokens = Math.ceil(promptText.length / 4);
+			}
+			const { ctx } = pickStrategy(promptTokens, serverStore.contextSize ?? undefined, margin);
+			const modelPath = serverStore.currentModelPath;
+			const gpuIndex = (config().gpuIndex as number) ?? -1;
+			if (modelPath && ctx > (serverStore.contextSize ?? 0)) {
+				await startServer(modelPath, ctx, gpuIndex);
+				serverStore.currentModelPath = modelPath;
+				await serverStore.fetch();
+			}
+		} catch (e) {
+			// Proaktiv sizing är en optimering – faller tillbaka på reaktiv auto-expand.
+			console.warn('[summarize] proaktiv ctx-sizing misslyckades:', e);
+		}
+	}
+
+	/** Hittar den lokala sökvägen för en registermodell (via filnamn). */
+	private async resolveModelPath(modelId: string): Promise<string | null> {
+		try {
+			const [registry, local] = await Promise.all([listAvailableModels(), listLocalModels()]);
+			const entry = registry.find((m) => m.id === modelId);
+			if (!entry) return null;
+			return local.find((l) => l.filename === entry.filename)?.path ?? null;
+		} catch {
+			return null;
+		}
+	}
+
+	/** Namn på modellen som servern just nu kör (för resultatetikett). */
+	private currentModelName(): string {
+		const path = serverStore.currentModelPath ?? '';
+		const file = path.split(/[\\/]/).pop() ?? '';
+		if (/qwen/i.test(file)) return 'Qwen3.5';
+		if (/gemma/i.test(file)) return 'Gemma 4';
+		return file.replace(/\.gguf$/i, '') || 'Modell';
 	}
 }
 

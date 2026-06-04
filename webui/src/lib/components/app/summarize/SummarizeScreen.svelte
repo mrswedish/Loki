@@ -7,7 +7,23 @@
 	import { Label } from '$lib/components/ui/label';
 	import { Switch } from '$lib/components/ui/switch';
 	import { cn } from '$lib/components/ui/utils';
-	import { FileText, FileUp, Paperclip, X, Sparkles, Settings2, Loader2 } from '@lucide/svelte';
+	import { MarkdownContent } from '$lib/components/app/content';
+	import { copyToClipboard } from '$lib/utils';
+	import { saveTextFile } from '$lib/tauri-bridge';
+	import { toast } from 'svelte-sonner';
+	import {
+		FileText,
+		FileUp,
+		Paperclip,
+		X,
+		Sparkles,
+		Settings2,
+		Loader2,
+		Copy,
+		Download,
+		Languages,
+		Plus
+	} from '@lucide/svelte';
 
 	let isDragOver = $state(false);
 	let dragCounter = 0;
@@ -18,6 +34,25 @@
 
 	let info = $derived(summarizeStore.info);
 	let busy = $derived(summarizeStore.busy);
+	// Visa resultatvyn när vi kör (streaming) eller är klara.
+	let showResult = $derived(
+		summarizeStore.state === 'running' ||
+			summarizeStore.state === 'done' ||
+			summarizeStore.result.length > 0
+	);
+
+	async function copyResult() {
+		await copyToClipboard(summarizeStore.result, 'Kopierat!', 'Kunde inte kopiera');
+	}
+
+	async function exportResult() {
+		try {
+			await saveTextFile(summarizeStore.result);
+			toast.success('Sparat');
+		} catch {
+			toast.error('Kunde inte spara filen');
+		}
+	}
 
 	function handleDragEnter(e: DragEvent) {
 		e.preventDefault();
@@ -59,7 +94,71 @@
 </script>
 
 <div class="mx-auto flex h-full w-full max-w-3xl flex-col gap-6 px-6 py-10">
-	{#if !info}
+	{#if showResult}
+		<!-- Steg 3: resultatpanel. Protokollet streamas in här; knappar för att
+		förbättra svenskan (Gemma), kopiera, exportera och börja om. -->
+		<div class="flex items-center justify-between gap-3">
+			<div class="min-w-0">
+				<h2 class="truncate text-base font-medium">
+					{summarizeStore.meetingName || 'Sammanfattning'}
+				</h2>
+				<p class="text-xs text-muted-foreground">
+					{#if summarizeStore.phase === 'summarizing'}
+						<Loader2 class="mr-1 inline size-3 animate-spin" />Sammanfattar med {summarizeStore.resultModel}…
+					{:else if summarizeStore.phase === 'refining'}
+						<Loader2 class="mr-1 inline size-3 animate-spin" />Förbättrar svenskan med Gemma…
+					{:else}
+						Skapad med {summarizeStore.resultModel}{summarizeStore.refined ? ' · språkrättad' : ''}
+					{/if}
+				</p>
+			</div>
+			<Button
+				variant="ghost"
+				size="sm"
+				class="gap-1.5"
+				onclick={() => summarizeStore.reset()}
+				disabled={busy}
+			>
+				<Plus class="size-4" />
+				Ny
+			</Button>
+		</div>
+
+		<div class="min-h-[200px] rounded-xl border border-border bg-card p-5">
+			{#if summarizeStore.result}
+				<div class="prose prose-sm dark:prose-invert max-w-none">
+					<MarkdownContent content={summarizeStore.result} />
+				</div>
+			{:else}
+				<div class="flex items-center gap-2 text-sm text-muted-foreground">
+					<Loader2 class="size-4 animate-spin" /> Förbereder…
+				</div>
+			{/if}
+		</div>
+
+		{#if summarizeStore.error}
+			<p class="text-sm text-destructive">{summarizeStore.error}</p>
+		{/if}
+
+		{#if summarizeStore.state === 'done'}
+			<div class="flex flex-wrap items-center gap-2">
+				{#if !summarizeStore.refined}
+					<Button onclick={() => summarizeStore.refineLanguage()} disabled={busy} class="gap-2">
+						<Languages class="size-4" />
+						Förbättra svenskan (Gemma)
+					</Button>
+				{/if}
+				<Button variant="outline" onclick={copyResult} disabled={busy} class="gap-2">
+					<Copy class="size-4" />
+					Kopiera
+				</Button>
+				<Button variant="outline" onclick={exportResult} disabled={busy} class="gap-2">
+					<Download class="size-4" />
+					Exportera
+				</Button>
+			</div>
+		{/if}
+	{:else if !info}
 		<!-- Steg 1: drop-zon-först. Lugn, tom startskärm. Drag-handlers på en
 		container-div (samma mönster som ChatScreen), klick hanteras av knappen inuti. -->
 		<div

@@ -164,18 +164,19 @@ class SummarizeStore {
 			console.warn('[summarize] proaktiv ctx-sizing misslyckades:', e);
 		}
 
-		// Kör via chatt-motorn. Sätt mallens system-prompt temporärt (sendMessage
-		// läser config().systemMessage synkront vid ny konversation) och återställ.
+		// Kör via chatt-motorn. Sätt mallens system-prompt OCH stäng av thinking
+		// temporärt (sendMessage läser config synkront vid ny konversation) och återställ.
+		//
+		// Thinking måste vara AV för sammanfattning: thinking-modeller (t.ex. Qwen3.5)
+		// kan annars förbruka hela kontexten på resonemang och aldrig nå svaret.
 		const previousSystem = config().systemMessage;
+		const previousThinking = config().enableThinking;
 		const title = this.meetingName.trim();
 		try {
 			this.state = 'running';
 			settingsStore.updateConfig('systemMessage', systemPrompt);
+			settingsStore.updateConfig('enableThinking', false);
 			await chatStore.sendMessage(this.transcript);
-			// sendMessage döper konversationen efter första meningen i transkriberingen.
-			// Skriv över med användarens mötesnamn så historiken blir lätt att överblicka.
-			const convId = conversationsStore.activeConversation?.id;
-			if (convId && title) await conversationsStore.updateConversationName(convId, title);
 			this.state = 'idle';
 		} catch (e) {
 			this.state = 'error';
@@ -183,6 +184,14 @@ class SummarizeStore {
 			toast.error(this.error);
 		} finally {
 			settingsStore.updateConfig('systemMessage', previousSystem);
+			settingsStore.updateConfig('enableThinking', previousThinking);
+			// sendMessage döper konversationen efter första meningen i transkriberingen.
+			// Skriv över med användarens mötesnamn – i finally så titeln sätts även om
+			// körningen avbryts efter att konversationen skapats.
+			const convId = conversationsStore.activeConversation?.id;
+			if (convId && title) {
+				await conversationsStore.updateConversationName(convId, title).catch(() => {});
+			}
 		}
 	}
 

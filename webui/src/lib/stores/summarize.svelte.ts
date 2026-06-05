@@ -10,10 +10,12 @@ import {
 	countTokens,
 	pickStrategy,
 	buildSystemPrompt,
+	splitIntoChunks,
+	buildMapPrompt,
 	RESPONSE_MARGIN,
 	RESPONSE_MARGIN_THINKING
 } from '$lib/services/summarize.service';
-import { LANGUAGE_REFINE_PROMPT } from '$lib/constants/summary-templates';
+import { LANGUAGE_REFINE_PROMPT, REDUCE_PROMPT } from '$lib/constants/summary-templates';
 import {
 	samplingForModel,
 	mergeSampling,
@@ -63,6 +65,9 @@ const REFINE_MODEL_ID = 'gemma-4-e2b';
  */
 const MAX_THINKING_TOKENS = 2500;
 
+/** Token-budget per bit vid chunkad sammanfattning (Geminis "~20 min"-råd). */
+const CHUNK_TOKEN_BUDGET = 8000;
+
 class SummarizeStore {
 	state = $state<SummarizeState>('idle');
 	phase = $state<SummarizePhase>(null);
@@ -96,6 +101,8 @@ class SummarizeStore {
 	thinkingTokens = $state<number>(0);
 	/** True medan modellen är i thinking-fasen (inget svar ännu). */
 	isThinking = $state<boolean>(false);
+	/** Förlopp vid chunkad sammanfattning: { current, total } eller null. */
+	chunkProgress = $state<{ current: number; total: number } | null>(null);
 	/** Konversations-id i historiken för denna körning. */
 	private convId: string | null = null;
 	/** Db-id för assistant-meddelandet (uppdateras vid språkrättning). */
@@ -134,6 +141,7 @@ class SummarizeStore {
 		this.tokensPerSec = 0;
 		this.thinkingTokens = 0;
 		this.isThinking = false;
+		this.chunkProgress = null;
 	}
 
 	/** Läser en transkriberingsfil, räknar tokens och beräknar uppskattning. */
@@ -226,23 +234,28 @@ class SummarizeStore {
 
 		try {
 			this.state = 'running';
-			const first = await this.stream(messages, {
-				enableThinking: this.thorough,
-				sampling: template.sampling
-			});
-			let text = first.text;
-			// Modellen fastnade i oändligt resonemang – kör om utan thinking så att ett
-			// resultat garanteras (annars väntar användaren för evigt).
-			if (first.hitThinkingCap) {
-				toast.info('Modellen tänkte för länge – kör om utan tankeläge.');
-				text = (
-					await this.stream(messages, {
-						enableThinking: false,
-						sampling: template.sampling
-					})
-				).text;
+			if (this.info.strategy === 'chunked') {
+				await this.runChunked(template);
+			} else {
+				// Befintligt single-flöde (behåll exakt som det är):
+				const first = await this.stream(messages, {
+					enableThinking: this.thorough,
+					sampling: template.sampling
+				});
+				let text = first.text;
+				// Modellen fastnade i oändligt resonemang – kör om utan thinking så att ett
+				// resultat garanteras (annars väntar användaren för evigt).
+				if (first.hitThinkingCap) {
+					toast.info('Modellen tänkte för länge – kör om utan tankeläge.');
+					text = (
+						await this.stream(messages, {
+							enableThinking: false,
+							sampling: template.sampling
+						})
+					).text;
+				}
+				await this.saveToHistory(text);
 			}
-			await this.saveToHistory(text);
 			this.state = 'done';
 		} catch (e) {
 			this.state = 'error';
@@ -250,6 +263,105 @@ class SummarizeStore {
 			toast.error(this.error);
 		} finally {
 			this.phase = null;
+			this.chunkProgress = null;
+		}
+	}
+
+	/**
+	 * Chunkad map-reduce för transkriberingar som inte ryms i modellens kontext.
+	 * Map: dela texten, sammanfatta varje bit. Reduce: slå ihop kronologiskt.
+	 * Thinking är alltid AV i map-steget (stabilare/snabbare över många bitar).
+	 */
+	private async runChunked(template: SummaryTemplate): Promise<void> {
+		// Mät tecken-per-token för exakt delning (fallback ~4).
+		let charsPerToken = 4;
+		try {
+			const tokens = await countTokens(this.transcript);
+			if (tokens > 0) charsPerToken = this.transcript.length / tokens;
+		} catch {
+			// behåll fallback
+		}
+
+		const chunks = splitIntoChunks(this.transcript, CHUNK_TOKEN_BUDGET, charsPerToken, 200);
+		const mapPrompt = buildMapPrompt(template);
+		const summaries: string[] = [];
+
+		// MAP: sammanfatta varje bit.
+		for (let i = 0; i < chunks.length; i++) {
+			this.chunkProgress = { current: i + 1, total: chunks.length };
+			this.result = ''; // visa progress, inte föregående bit
+			await this.ensureCtxForText(`${mapPrompt}\n\n${chunks[i]}`);
+			const messages: ApiChatMessageData[] = [
+				{ role: MessageRole.SYSTEM, content: mapPrompt },
+				{ role: MessageRole.USER, content: chunks[i] }
+			];
+			const { text } = await this.stream(messages, {
+				enableThinking: false,
+				sampling: template.sampling
+			});
+			const trimmed = text.trim();
+			// Hoppa över avsnitt utan relevant innehåll.
+			if (trimmed && !/^inget relevant/i.test(trimmed)) {
+				summaries.push(trimmed);
+			}
+		}
+
+		// Om inget relevant alls hittades.
+		if (summaries.length === 0) {
+			this.chunkProgress = null;
+			this.result = 'Inget relevant innehåll hittades i transkriberingen.';
+			await this.saveToHistory(this.result);
+			return;
+		}
+
+		// REDUCE: slå ihop delsammanfattningarna kronologiskt.
+		this.chunkProgress = null;
+		this.phase = 'summarizing';
+		this.result = '';
+		const joined = summaries.join('\n\n---\n\n');
+		// Lägg agendan i reduce-steget om sådan finns (map utelämnar den).
+		const reduceSystem = this.agenda
+			? `${REDUCE_PROMPT}\n\n--- AGENDA ---\n${this.agenda}\n--- SLUT AGENDA ---`
+			: REDUCE_PROMPT;
+		await this.ensureCtxForText(`${reduceSystem}\n\n${joined}`);
+		const reduceMessages: ApiChatMessageData[] = [
+			{ role: MessageRole.SYSTEM, content: reduceSystem },
+			{ role: MessageRole.USER, content: joined }
+		];
+		const { text: final } = await this.stream(reduceMessages, {
+			enableThinking: false,
+			sampling: template.sampling
+		});
+		await this.saveToHistory(final);
+	}
+
+	/**
+	 * Säkrar ctx för en given prompt-text (används per bit i chunkad körning).
+	 * Liknar ensureContextFor men utan strategy-guarden (chunkad gör egen sizing).
+	 */
+	private async ensureCtxForText(promptText: string): Promise<void> {
+		if (!isTauriEnv()) return;
+		try {
+			let promptTokens: number;
+			try {
+				promptTokens = await countTokens(promptText);
+			} catch {
+				promptTokens = Math.ceil(promptText.length / 4);
+			}
+			const { ctx } = pickStrategy(
+				promptTokens,
+				serverStore.contextSize ?? undefined,
+				RESPONSE_MARGIN
+			);
+			const modelPath = serverStore.currentModelPath;
+			const gpuIndex = (config().gpuIndex as number) ?? -1;
+			if (modelPath && ctx > (serverStore.contextSize ?? 0)) {
+				await startServer(modelPath, ctx, gpuIndex);
+				serverStore.currentModelPath = modelPath;
+				await serverStore.fetch();
+			}
+		} catch (e) {
+			console.warn('[summarize] ctx-sizing (chunk) misslyckades:', e);
 		}
 	}
 

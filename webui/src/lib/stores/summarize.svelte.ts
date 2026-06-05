@@ -14,7 +14,11 @@ import {
 	RESPONSE_MARGIN_THINKING
 } from '$lib/services/summarize.service';
 import { LANGUAGE_REFINE_PROMPT } from '$lib/constants/summary-templates';
-import { samplingForModel } from '$lib/constants/model-sampling';
+import {
+	samplingForModel,
+	mergeSampling,
+	type TemplateSampling
+} from '$lib/constants/model-sampling';
 import type { SummaryTemplate } from '$lib/constants/summary-templates';
 import { summaryTemplatesStore } from '$lib/stores/summary-templates.svelte';
 import { MessageRole, MessageType } from '$lib/enums';
@@ -76,6 +80,8 @@ class SummarizeStore {
 	result = $state<string>('');
 	/** Namn på modellen som producerade nuvarande result (visas i UI). */
 	resultModel = $state<string>('');
+	/** Temperatur som faktiskt användes (för resultat-etiketten). */
+	usedTemperature = $state<number | null>(null);
 	/** True om resultatet redan språkrättats (döljer knappen). */
 	refined = $state<boolean>(false);
 	/**
@@ -116,6 +122,7 @@ class SummarizeStore {
 		this.result = '';
 		this.resultModel = '';
 		this.refined = false;
+		this.usedTemperature = null;
 		this.convId = null;
 		this.resultMessageId = null;
 		this.resetProgress();
@@ -219,13 +226,21 @@ class SummarizeStore {
 
 		try {
 			this.state = 'running';
-			const first = await this.stream(messages, { enableThinking: this.thorough });
+			const first = await this.stream(messages, {
+				enableThinking: this.thorough,
+				sampling: template.sampling
+			});
 			let text = first.text;
 			// Modellen fastnade i oändligt resonemang – kör om utan thinking så att ett
 			// resultat garanteras (annars väntar användaren för evigt).
 			if (first.hitThinkingCap) {
 				toast.info('Modellen tänkte för länge – kör om utan tankeläge.');
-				text = (await this.stream(messages, { enableThinking: false })).text;
+				text = (
+					await this.stream(messages, {
+						enableThinking: false,
+						sampling: template.sampling
+					})
+				).text;
 			}
 			await this.saveToHistory(text);
 			this.state = 'done';
@@ -293,12 +308,14 @@ class SummarizeStore {
 	 */
 	private async stream(
 		messages: ApiChatMessageData[],
-		opts: { enableThinking: boolean }
+		opts: { enableThinking: boolean; sampling?: TemplateSampling }
 	): Promise<{ text: string; hitThinkingCap: boolean }> {
 		// Välj modell-anpassad sampling. En enda hårdkodad temperatur fungerar dåligt
 		// (Qwen utan presence_penalty upprepar sig och spårar ur). Profilen väljs
 		// utifrån vilken modell servern kör + thinking-läge.
-		const sampling = samplingForModel(serverStore.currentModelPath, opts.enableThinking);
+		const base = samplingForModel(serverStore.currentModelPath, opts.enableThinking);
+		const sampling = mergeSampling(base, opts.sampling);
+		this.usedTemperature = sampling.temperature;
 		this.resetProgress();
 
 		// Tak för thinking: små modeller (Qwen 4B) kan annars resonera i oändlighet
@@ -321,6 +338,7 @@ class SummarizeStore {
 					top_k: sampling.top_k,
 					min_p: sampling.min_p,
 					presence_penalty: sampling.presence_penalty,
+					repeat_penalty: sampling.repeat_penalty,
 					onChunk: (chunk: string) => {
 						// Första content-token → tänkandet är klart.
 						this.isThinking = false;

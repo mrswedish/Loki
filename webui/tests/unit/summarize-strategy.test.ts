@@ -8,7 +8,10 @@ import {
 	RESPONSE_MARGIN,
 	RESPONSE_MARGIN_THINKING
 } from '$lib/services/summarize.service';
-import type { SummaryTemplate } from '$lib/constants/summary-templates';
+import { COMMON_PREAMBLE, type SummaryTemplate } from '$lib/constants/summary-templates';
+
+/** En stabil delfras ur preambeln (de första 30 tecknen) som inte hårdkodas. */
+const PREAMBLE_PHRASE = COMMON_PREAMBLE.slice(0, 30);
 
 const TEMPLATE: SummaryTemplate = {
 	id: 'test',
@@ -80,7 +83,7 @@ describe('buildSystemPrompt', () => {
 		const custom: SummaryTemplate = { ...TEMPLATE, builtin: false };
 		const out = buildSystemPrompt(custom);
 		expect(out).toContain('BAS-PROMPT');
-		expect(out).toContain('trogen källan'); // del av COMMON_PREAMBLE
+		expect(out).toContain(PREAMBLE_PHRASE); // preambeln har lagts på
 	});
 
 	it('dubblerar inte preambeln om den redan finns i prompten (kopia av inbyggd)', () => {
@@ -93,7 +96,7 @@ describe('buildSystemPrompt', () => {
 		};
 		const out = buildSystemPrompt(copyOfBuiltin);
 		// Preambelns kärnfras får bara förekomma en gång.
-		const occurrences = out.split('trogen källan').length - 1;
+		const occurrences = out.split(PREAMBLE_PHRASE).length - 1;
 		expect(occurrences).toBe(1);
 		expect(builtinOut).toBe('BAS-PROMPT');
 	});

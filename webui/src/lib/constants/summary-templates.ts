@@ -1,6 +1,9 @@
-import { FileText, ListChecks, ClipboardList, Gavel } from '@lucide/svelte';
+import { NotebookPen, FileText, ListChecks, ClipboardList, Gavel } from '@lucide/svelte';
 import type { Component } from 'svelte';
 import type { TemplateSampling } from '$lib/constants/model-sampling';
+
+/** Gemensam sampling-default för inbyggda mallar: låg temp för trohet mot källan. */
+const STRICT_SAMPLING: TemplateSampling = { temperature: 0.1, repeat_penalty: 1.1 };
 
 /**
  * Mallar för Loki 2.0 sammanfattningsläge.
@@ -34,30 +37,55 @@ export interface SummaryTemplate {
  * trogen källan och språket, och undviker pratiga inledningar.
  */
 export const COMMON_PREAMBLE =
-	'Du är ett verktyg som bearbetar en transkribering av ett möte eller samtal. ' +
-	'Arbeta ENBART utifrån transkriberingens innehåll – hitta aldrig på fakta, namn, ' +
-	'beslut eller siffror som inte finns i texten. Svara på samma språk som ' +
-	'transkriberingen (oftast svenska). ' +
-	'Var trogen källan: använd talarnas egna ord och termer. Byt INTE ut ord mot ' +
-	'synonymer, skriv inte om i onödan och använd inga metaforer, bildspråk eller ' +
-	'tolkande omskrivningar som kan förvränga vad som sades eller beslutades. ' +
-	'Skriv inga inledande eller avslutande kommentarer om uppgiften – leverera bara ' +
-	'det begärda dokumentet i Markdown.';
+	'Du är expert på administrativ struktur och textförädling. Du bearbetar en rå, brusig ' +
+	'transkribering av ett möte eller samtal till ett rent, begripligt dokument.\n\n' +
+	'TRANSKRIBERINGSFEL: Texten kommer från röstigenkänning och innehåller feltolkade ord, ' +
+	'avbrutna meningar och upprepningar. Använd sammanhanget för att förstå vad som egentligen ' +
+	'menades och korrigera uppenbart feltolkade ord till rätt facktermer eller korrekta svenska ' +
+	'ord. Hitta ALDRIG på fakta, namn, beslut eller siffror som inte finns i texten.\n\n' +
+	'FILTRERA BORT KALLPRAT: Ta bort socialt småprat och privat snack utan relevans för mötets ' +
+	'kärnfrågor (t.ex. hälsningar, väder, teknikstrul, privata anekdoter).\n\n' +
+	'KRONOLOGI: Följ mötet i den ordning det skedde, ämne för ämne.\n\n' +
+	'TROHET: Använd talarnas egna ord och termer. Byt INTE ut ord mot synonymer i onödan och ' +
+	'använd inga metaforer eller tolkande omskrivningar som kan förvränga vad som sades. ' +
+	'Sammanfatta vad diskussionen landade i – skriv inte av dialogen rakt av.\n\n' +
+	'Svara på samma språk som transkriberingen (oftast svenska). Skriv inga inledande eller ' +
+	'avslutande kommentarer om uppgiften – leverera bara det begärda dokumentet i Markdown.';
 
 export const SUMMARY_TEMPLATES: SummaryTemplate[] = [
+	{
+		id: 'meeting-notes',
+		label: 'Minnesanteckning',
+		description: 'Kronologisk minnesanteckning, kallprat bortrensat',
+		icon: NotebookPen,
+		builtin: true,
+		sampling: STRICT_SAMPLING,
+		systemPrompt:
+			`${COMMON_PREAMBLE}\n\n` +
+			'Skapa en kronologisk minnesanteckning av mötet.\n\n' +
+			'FORMAT: Skriv i löpande text och korta stycken med tydliga, beskrivande underrubriker ' +
+			'för varje nytt ämne som diskuteras, i den ordning ämnena togs upp. Använd punktlistor ' +
+			'under en rubrik ENDAST om konkreta beslut eller beslutade åtgärder nämns.\n\n' +
+			'STRUKTUR per ämne:\n' +
+			'### [Ämne i kronologisk ordning]\n' +
+			'Kort sammanfattning i styckeform av vad som diskuterades.\n' +
+			'- **Beslut/Åtgärd (om det finns):** vem gör vad och när.\n\n' +
+			'TON: saklig, professionell och sammanfattande.'
+	},
 	{
 		id: 'meeting-minutes',
 		label: 'Mötesprotokoll',
 		description: 'Strukturerat protokoll med deltagare, beslut och åtgärder',
 		icon: FileText,
 		builtin: true,
+		sampling: STRICT_SAMPLING,
 		systemPrompt:
 			`${COMMON_PREAMBLE}\n\n` +
 			'Skapa ett strukturerat mötesprotokoll med följande rubriker (utelämna en rubrik ' +
 			'helt om underlag saknas i transkriberingen):\n' +
 			'## Sammanfattning – två till fyra meningar om mötets syfte och utfall.\n' +
 			'## Deltagare – namngivna personer som tydligt deltar i samtalet.\n' +
-			'## Diskussionspunkter – de viktigaste ämnena, kort per punkt.\n' +
+			'## Diskussionspunkter – de viktigaste ämnena i kronologisk ordning, kort per punkt.\n' +
 			'## Beslut – fattade beslut, ett per punkt.\n' +
 			'## Åtgärder – att-göra-punkter med ansvarig person när det framgår, format ' +
 			'"- [ ] Åtgärd — Ansvarig".'
@@ -68,11 +96,12 @@ export const SUMMARY_TEMPLATES: SummaryTemplate[] = [
 		description: '5–10 punkter med det viktigaste',
 		icon: ListChecks,
 		builtin: true,
+		sampling: STRICT_SAMPLING,
 		systemPrompt:
 			`${COMMON_PREAMBLE}\n\n` +
-			'Skapa en kort, lättläst sammanfattning som en punktlista med 5–10 punkter. ' +
-			'Fånga de viktigaste ämnena, slutsatserna och eventuella beslut. Varje punkt ska ' +
-			'vara en kort, fristående mening. Inga underrubriker.'
+			'Skapa en kort, lättläst sammanfattning som en punktlista med 5–10 punkter, i den ' +
+			'ordning ämnena togs upp. Fånga de viktigaste ämnena, slutsatserna och eventuella ' +
+			'beslut. Varje punkt ska vara en kort, fristående mening. Inga underrubriker.'
 	},
 	{
 		id: 'action-items',
@@ -80,6 +109,7 @@ export const SUMMARY_TEMPLATES: SummaryTemplate[] = [
 		description: 'Bara att-göra-listan med ansvariga',
 		icon: ClipboardList,
 		builtin: true,
+		sampling: STRICT_SAMPLING,
 		systemPrompt:
 			`${COMMON_PREAMBLE}\n\n` +
 			'Extrahera enbart konkreta åtgärder och uppgifter som nämns i transkriberingen. ' +
@@ -93,12 +123,13 @@ export const SUMMARY_TEMPLATES: SummaryTemplate[] = [
 		description: 'Fattade beslut med motivering',
 		icon: Gavel,
 		builtin: true,
+		sampling: STRICT_SAMPLING,
 		systemPrompt:
 			`${COMMON_PREAMBLE}\n\n` +
-			'Lista alla beslut som fattas i transkriberingen. För varje beslut, ange på en ' +
-			'egen rad: **Beslut:** vad som beslutades, och **Motivering:** den motivering eller ' +
-			'det resonemang som framgår av samtalet. Utelämna motivering om den inte framgår. ' +
-			'Om inga beslut fattas, skriv "Inga beslut fattades."'
+			'Lista alla beslut som fattas i transkriberingen, i kronologisk ordning. För varje ' +
+			'beslut, ange på en egen rad: **Beslut:** vad som beslutades, och **Motivering:** den ' +
+			'motivering eller det resonemang som framgår av samtalet. Utelämna motivering om den ' +
+			'inte framgår. Om inga beslut fattas, skriv "Inga beslut fattades."'
 	}
 ];
 
@@ -120,8 +151,24 @@ export const LANGUAGE_REFINE_PROMPT =
 	'språkligt fel. Behåll Markdown-formatet. Svara enbart med det rättade dokumentet – inga ' +
 	'kommentarer om vad du ändrat.';
 
+/**
+ * Prompt för reduce-steget i chunkad sammanfattning. Slår ihop delsammanfattningar
+ * (en per avsnitt av en lång transkribering) till ett sammanhängande dokument.
+ * Kronologin från delarna bevaras strikt.
+ */
+export const REDUCE_PROMPT =
+	'Du får flera delsammanfattningar av olika avsnitt av samma möte, i kronologisk ordning ' +
+	'(separerade med "---"). Slå ihop dem till ETT enda sammanhängande dokument.\n\n' +
+	'- Behåll kronologin strikt: avsnitten kommer i den ordning de inträffade.\n' +
+	'- Slå ihop redundans: om samma ämne, beslut eller åtgärd nämns i flera delar, ta med det ' +
+	'en gång.\n' +
+	'- Bevara alla beslut, åtgärder, namn och siffror exakt.\n' +
+	'- Ignorera delar som bara säger "Inget relevant i detta avsnitt".\n' +
+	'- Använd tydliga underrubriker per ämne. Lägg inte till nytt innehåll och tolka inte om.\n' +
+	'Svara enbart med det sammanslagna dokumentet i Markdown.';
+
 /** Den mall som väljs som standard när vyn öppnas. */
-export const DEFAULT_TEMPLATE_ID = 'meeting-minutes';
+export const DEFAULT_TEMPLATE_ID = 'meeting-notes';
 
 /** Slår upp en inbyggd mall på id. */
 export function getBuiltinTemplate(id: string): SummaryTemplate | undefined {

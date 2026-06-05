@@ -88,6 +88,20 @@ export function buildMapPrompt(template: SummaryTemplate): string {
 }
 
 /**
+ * Avgör om en map-delsammanfattning betyder "inget relevant innehåll" och ska
+ * hoppas över. Modellen kan formulera sig olika trots instruktionen, så vi matchar
+ * brett: bara korta svar (< 80 tecken) som innehåller frasen "inget relevant",
+ * efter att inledande citattecken/markdown-emfas strippats.
+ */
+export function isEmptyChunkResponse(text: string): boolean {
+	const cleaned = text
+		.trim()
+		.replace(/^[*_"'`\s]+/, '') // strippa inledande emfas/citattecken
+		.toLowerCase();
+	return text.trim().length < 80 && /inget relevant/.test(cleaned);
+}
+
+/**
  * Räknar antalet tokens i en text via llama-serverns /tokenize-endpoint.
  * Exakt för den laddade modellens tokeniserare. Kastar vid serverfel.
  */

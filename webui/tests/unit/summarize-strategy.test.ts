@@ -5,6 +5,7 @@ import {
 	splitIntoChunks,
 	buildSystemPrompt,
 	buildMapPrompt,
+	isEmptyChunkResponse,
 	MAX_CTX,
 	RESPONSE_MARGIN,
 	RESPONSE_MARGIN_THINKING
@@ -109,6 +110,28 @@ describe('buildMapPrompt', () => {
 		expect(out).toContain('BAS-PROMPT');
 		expect(out).toContain('ETT AVSNITT');
 		expect(out).toContain('Inget relevant i detta avsnitt');
+	});
+});
+
+describe('isEmptyChunkResponse', () => {
+	it('fångar exakt formulering', () => {
+		expect(isEmptyChunkResponse('Inget relevant i detta avsnitt.')).toBe(true);
+	});
+
+	it('fångar varianter (citattecken, emfas, omvänd ordföljd)', () => {
+		expect(isEmptyChunkResponse('"Inget relevant i detta avsnitt."')).toBe(true);
+		expect(isEmptyChunkResponse('*Inget relevant.*')).toBe(true);
+		expect(isEmptyChunkResponse('Detta avsnitt innehåller inget relevant.')).toBe(true);
+		expect(isEmptyChunkResponse('inget relevant')).toBe(true);
+	});
+
+	it('släpper igenom riktigt innehåll', () => {
+		expect(isEmptyChunkResponse('### Budget\nGruppen beslutade att öka anslaget.')).toBe(false);
+		// Lång text som råkar nämna frasen ska INTE filtreras bort.
+		const long =
+			'Mötet diskuterade om något var relevant eller inte, och kom fram till att ' +
+			'budgetfrågan var högst relevant för verksamheten under kommande kvartal.';
+		expect(isEmptyChunkResponse(long)).toBe(false);
 	});
 });
 

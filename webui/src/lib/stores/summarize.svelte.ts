@@ -12,6 +12,8 @@ import {
 	buildSystemPrompt,
 	splitIntoChunks,
 	buildMapPrompt,
+	isEmptyChunkResponse,
+	MAX_CTX,
 	RESPONSE_MARGIN,
 	RESPONSE_MARGIN_THINKING
 } from '$lib/services/summarize.service';
@@ -300,8 +302,10 @@ class SummarizeStore {
 				sampling: template.sampling
 			});
 			const trimmed = text.trim();
-			// Hoppa över avsnitt utan relevant innehåll.
-			if (trimmed && !/^inget relevant/i.test(trimmed)) {
+			// Hoppa över avsnitt utan relevant innehåll. Modellen kan formulera sig
+			// olika ("Inget relevant...", *kursivt*, med citattecken, eller omvänt
+			// "...finns inget relevant"), så matcha brett men bara korta svar.
+			if (trimmed && !isEmptyChunkResponse(trimmed)) {
 				summaries.push(trimmed);
 			}
 		}
@@ -323,6 +327,21 @@ class SummarizeStore {
 		const reduceSystem = this.agenda
 			? `${REDUCE_PROMPT}\n\n--- AGENDA ---\n${this.agenda}\n--- SLUT AGENDA ---`
 			: REDUCE_PROMPT;
+
+		// Skydd: om delsammanfattningarna tillsammans inte ryms i taket finns ingen
+		// reaktiv auto-expand här. Varna användaren (hierarkisk reduce är framtida arbete).
+		try {
+			const reduceTokens = await countTokens(`${reduceSystem}\n\n${joined}`);
+			if (reduceTokens + RESPONSE_MARGIN > MAX_CTX) {
+				toast.warning(
+					'Mycket lång transkribering – sammanslagningen kan bli ofullständig. ' +
+						'Överväg att dela upp inspelningen.'
+				);
+			}
+		} catch {
+			// tokenräkning är best-effort
+		}
+
 		await this.ensureCtxForText(`${reduceSystem}\n\n${joined}`);
 		const reduceMessages: ApiChatMessageData[] = [
 			{ role: MessageRole.SYSTEM, content: reduceSystem },

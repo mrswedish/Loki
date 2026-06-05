@@ -54,6 +54,14 @@
 	function onTemplateSaved(id: string) {
 		selectedTemplate = id;
 	}
+	// Radera en egen mall (med bekräftelse). Om den var vald, fall tillbaka till default.
+	function deleteTemplate(id: string) {
+		const tpl = summaryTemplatesStore.get(id);
+		if (!confirm(`Radera mallen "${tpl?.label ?? 'mall'}"?`)) return;
+		summaryTemplatesStore.remove(id);
+		if (selectedTemplate === id) selectedTemplate = DEFAULT_TEMPLATE_ID;
+		toast.success('Mall raderad');
+	}
 
 	let transcriptInput: HTMLInputElement;
 	let agendaInput: HTMLInputElement;
@@ -355,6 +363,7 @@
 				onCreate={openCreateTemplate}
 				onEdit={openEditTemplate}
 				onDuplicate={duplicateTemplate}
+				onDelete={deleteTemplate}
 			/>
 		</div>
 

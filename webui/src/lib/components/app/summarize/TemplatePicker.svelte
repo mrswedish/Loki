@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { summaryTemplatesStore } from '$lib/stores/summary-templates.svelte';
 	import { cn } from '$lib/components/ui/utils';
-	import { Plus, Pencil, Copy } from '@lucide/svelte';
+	import { Plus, Pencil, Copy, Trash2 } from '@lucide/svelte';
 
 	interface Props {
 		selectedId: string;
@@ -9,9 +9,10 @@
 		onCreate: () => void;
 		onEdit: (id: string) => void;
 		onDuplicate: (id: string) => void;
+		onDelete: (id: string) => void;
 	}
 
-	let { selectedId, onSelect, onCreate, onEdit, onDuplicate }: Props = $props();
+	let { selectedId, onSelect, onCreate, onEdit, onDuplicate, onDelete }: Props = $props();
 
 	let all = $derived(summaryTemplatesStore.all);
 </script>
@@ -64,6 +65,14 @@
 						class="rounded p-1 text-muted-foreground hover:text-foreground"
 					>
 						<Pencil class="size-3.5" />
+					</button>
+					<button
+						type="button"
+						title="Radera mall"
+						onclick={() => onDelete(template.id)}
+						class="rounded p-1 text-muted-foreground hover:text-destructive"
+					>
+						<Trash2 class="size-3.5" />
 					</button>
 				{/if}
 			</div>

@@ -2,8 +2,12 @@ import { NotebookPen, FileText, ListChecks, ClipboardList, Gavel } from '@lucide
 import type { Component } from 'svelte';
 import type { TemplateSampling } from '$lib/constants/model-sampling';
 
-/** Gemensam sampling-default för inbyggda mallar: låg temp för trohet mot källan. */
-const STRICT_SAMPLING: TemplateSampling = { temperature: 0.1, repeat_penalty: 1.1 };
+/**
+ * Gemensam sampling-default för inbyggda mallar: mycket låg temp för trohet mot
+ * källan och färre feltolkningar (modellen väljer det mest sannolika ordet, vilket
+ * minskar "kreativa" gissningar på rörig transkriberingstext).
+ */
+const STRICT_SAMPLING: TemplateSampling = { temperature: 0.05, repeat_penalty: 1.1 };
 
 /**
  * Mallar för Loki 2.0 sammanfattningsläge.
@@ -39,10 +43,17 @@ export interface SummaryTemplate {
 export const COMMON_PREAMBLE =
 	'Du är expert på administrativ struktur och textförädling. Du bearbetar en rå, brusig ' +
 	'transkribering av ett möte eller samtal till ett rent, begripligt dokument.\n\n' +
-	'TRANSKRIBERINGSFEL: Texten kommer från röstigenkänning och innehåller feltolkade ord, ' +
-	'avbrutna meningar och upprepningar. Använd sammanhanget för att förstå vad som egentligen ' +
-	'menades och korrigera uppenbart feltolkade ord till rätt facktermer eller korrekta svenska ' +
-	'ord. Hitta ALDRIG på fakta, namn, beslut eller siffror som inte finns i texten.\n\n' +
+	'TRANSKRIBERINGSFEL (VIKTIGT): Texten kommer från röstigenkänning och innehåller grova ' +
+	'feltolkningar – helt felaktiga ord, avbrutna meningar och upprepningar. Använd sammanhanget ' +
+	'för att förstå vad som egentligen menades och korrigera uppenbart feltolkade ord till rätt ' +
+	'facktermer eller korrekta svenska ord.\n' +
+	'- Obegripliga förkortningar (t.ex. "DR", "IHL", "ITC") och märkliga, malplacerade ord ' +
+	'(t.ex. "skolor", "kårkortsavdelningen" i ett tjänstemannamöte) är nästan alltid ' +
+	'transkriberingsfel. Tolka dem utifrån sammanhanget.\n' +
+	'- Om du är osäker på vad ett skevt ord ska vara: använd hellre en generell, neutral term ' +
+	'("organisationen", "medarbetare", "en avdelning") än att föra vidare det felaktiga ordet ' +
+	'eller gissa fritt.\n' +
+	'- Hitta ALDRIG på fakta, namn, beslut eller siffror som inte finns i texten.\n\n' +
 	'FILTRERA BORT KALLPRAT: Ta bort socialt småprat och privat snack utan relevans för mötets ' +
 	'kärnfrågor (t.ex. hälsningar, väder, teknikstrul, privata anekdoter).\n\n' +
 	'KRONOLOGI: Följ mötet i den ordning det skedde, ämne för ämne.\n\n' +

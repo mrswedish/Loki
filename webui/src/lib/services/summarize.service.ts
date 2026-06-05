@@ -1,5 +1,5 @@
 import { apiPost } from '$lib/utils/api-fetch';
-import type { SummaryTemplate } from '$lib/constants/summary-templates';
+import { COMMON_PREAMBLE, type SummaryTemplate } from '$lib/constants/summary-templates';
 
 /**
  * SummarizeService – kärnlogik för Loki 2.0 sammanfattningsläge.
@@ -48,7 +48,11 @@ export interface StrategyDecision {
  * @param agenda    Råtext från en uppladdad agenda (.txt/.pdf), eller undefined.
  */
 export function buildSystemPrompt(template: SummaryTemplate, agenda?: string): string {
-	const base = template.systemPrompt;
+	// Egna mallar har inte trohets-preamblen inbyggd (inbyggda mallar har den) –
+	// prependa den så även användarens egna mallar håller sig troget källan.
+	const base = template.builtin
+		? template.systemPrompt
+		: `${COMMON_PREAMBLE}\n\n${template.systemPrompt}`;
 	const trimmed = agenda?.trim();
 	if (!trimmed) return base;
 

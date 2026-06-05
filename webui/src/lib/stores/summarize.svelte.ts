@@ -15,9 +15,11 @@ import {
 } from '$lib/services/summarize.service';
 import { LANGUAGE_REFINE_PROMPT } from '$lib/constants/summary-templates';
 import { samplingForModel } from '$lib/constants/model-sampling';
-import { getBuiltinTemplate, type SummaryTemplate } from '$lib/constants/summary-templates';
+import type { SummaryTemplate } from '$lib/constants/summary-templates';
+import { summaryTemplatesStore } from '$lib/stores/summary-templates.svelte';
 import { MessageRole, MessageType } from '$lib/enums';
 import type { ApiChatMessageData } from '$lib/types/api';
+import type { ChatMessageTimings, ChatMessagePromptProgress } from '$lib/types/chat';
 import { toast } from 'svelte-sonner';
 
 /**
@@ -69,6 +71,14 @@ class SummarizeStore {
 	resultModel = $state<string>('');
 	/** True om resultatet redan språkrättats (döljer knappen). */
 	refined = $state<boolean>(false);
+	/**
+	 * Förloppsinfo under körning (för progress-indikatorn i resultatvyn).
+	 * promptPercent: prompt-processing 0–100 (innan första token).
+	 * generatedTokens + tokensPerSec: under genereringen.
+	 */
+	promptPercent = $state<number | null>(null);
+	generatedTokens = $state<number>(0);
+	tokensPerSec = $state<number>(0);
 	/** Konversations-id i historiken för denna körning. */
 	private convId: string | null = null;
 	/** Db-id för assistant-meddelandet (uppdateras vid språkrättning). */
@@ -97,6 +107,13 @@ class SummarizeStore {
 		this.refined = false;
 		this.convId = null;
 		this.resultMessageId = null;
+		this.resetProgress();
+	}
+
+	private resetProgress(): void {
+		this.promptPercent = null;
+		this.generatedTokens = 0;
+		this.tokensPerSec = 0;
 	}
 
 	/** Läser en transkriberingsfil, räknar tokens och beräknar uppskattning. */
@@ -156,7 +173,8 @@ class SummarizeStore {
 			toast.error('Ladda upp en transkribering först.');
 			return;
 		}
-		const template = customTemplate ?? getBuiltinTemplate(templateId);
+		// Slå upp mallen bland både inbyggda och användarens egna mallar.
+		const template = customTemplate ?? summaryTemplatesStore.get(templateId);
 		if (!template) {
 			toast.error('Okänd mall.');
 			return;
@@ -261,6 +279,7 @@ class SummarizeStore {
 		// (Qwen utan presence_penalty upprepar sig och spårar ur). Profilen väljs
 		// utifrån vilken modell servern kör + thinking-läge.
 		const sampling = samplingForModel(serverStore.currentModelPath, opts.enableThinking);
+		this.resetProgress();
 		let acc = '';
 		await ChatService.sendMessage(messages, {
 			stream: true,
@@ -274,6 +293,23 @@ class SummarizeStore {
 			onChunk: (chunk: string) => {
 				acc += chunk;
 				this.result = ChatService.stripRawThinkTags(acc);
+			},
+			onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
+				// Prompt-processing-fas (innan första token): visa procent.
+				if (promptProgress && promptProgress.total > 0) {
+					this.promptPercent = Math.min(
+						100,
+						Math.round((promptProgress.processed / promptProgress.total) * 100)
+					);
+				}
+				// Genereringsfas: visa antal tokens + tokens/sek.
+				if (timings?.predicted_n) {
+					this.promptPercent = null; // prompt klar – vi genererar nu
+					this.generatedTokens = timings.predicted_n;
+					if (timings.predicted_ms) {
+						this.tokensPerSec = (timings.predicted_n / timings.predicted_ms) * 1000;
+					}
+				}
 			},
 			onError: (err: Error) => {
 				throw err;

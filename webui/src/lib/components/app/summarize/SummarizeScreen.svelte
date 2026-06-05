@@ -2,6 +2,7 @@
 	import { summarizeStore } from '$lib/stores/summarize.svelte';
 	import { DEFAULT_TEMPLATE_ID } from '$lib/constants/summary-templates';
 	import TemplatePicker from './TemplatePicker.svelte';
+	import TemplateEditorDialog from './TemplateEditorDialog.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
@@ -28,6 +29,20 @@
 	let isDragOver = $state(false);
 	let dragCounter = 0;
 	let selectedTemplate = $state(DEFAULT_TEMPLATE_ID);
+	let editorOpen = $state(false);
+	let editorEditId = $state<string | null>(null);
+
+	function openCreateTemplate() {
+		editorEditId = null;
+		editorOpen = true;
+	}
+	function openEditTemplate(id: string) {
+		editorEditId = id;
+		editorOpen = true;
+	}
+	function onTemplateSaved(id: string) {
+		selectedTemplate = id;
+	}
 
 	let transcriptInput: HTMLInputElement;
 	let agendaInput: HTMLInputElement;
@@ -40,6 +55,19 @@
 			summarizeStore.state === 'done' ||
 			summarizeStore.result.length > 0
 	);
+
+	// Förlopps-text under körning: prompt-processing-procent, sedan tokens/sek.
+	let progressText = $derived.by(() => {
+		if (summarizeStore.promptPercent !== null) {
+			return `Bearbetar ${summarizeStore.promptPercent}%`;
+		}
+		if (summarizeStore.generatedTokens > 0) {
+			const tps = summarizeStore.tokensPerSec;
+			const rate = tps > 0 ? ` · ${tps.toFixed(1)} tokens/s` : '';
+			return `${summarizeStore.generatedTokens} tokens${rate}`;
+		}
+		return '';
+	});
 
 	async function copyResult() {
 		await copyToClipboard(summarizeStore.result, 'Kopierat!', 'Kunde inte kopiera');
@@ -109,9 +137,13 @@
 				</h2>
 				<p class="text-xs text-muted-foreground">
 					{#if summarizeStore.phase === 'summarizing'}
-						<Loader2 class="mr-1 inline size-3 animate-spin" />Sammanfattar med {summarizeStore.resultModel}…
+						<Loader2 class="mr-1 inline size-3 animate-spin" />Sammanfattar med {summarizeStore.resultModel}{progressText
+							? ` · ${progressText}`
+							: '…'}
 					{:else if summarizeStore.phase === 'refining'}
-						<Loader2 class="mr-1 inline size-3 animate-spin" />Förbättrar svenskan med Gemma…
+						<Loader2 class="mr-1 inline size-3 animate-spin" />Förbättrar svenskan med Gemma{progressText
+							? ` · ${progressText}`
+							: '…'}
 					{:else}
 						Skapad med {summarizeStore.resultModel}{summarizeStore.refined ? ' · språkrättad' : ''}
 					{/if}
@@ -135,8 +167,23 @@
 					<MarkdownContent content={summarizeStore.result} />
 				</div>
 			{:else}
-				<div class="flex items-center gap-2 text-sm text-muted-foreground">
-					<Loader2 class="size-4 animate-spin" /> Förbereder…
+				<div class="space-y-3">
+					<div class="flex items-center gap-2 text-sm text-muted-foreground">
+						<Loader2 class="size-4 animate-spin" />
+						{#if summarizeStore.promptPercent !== null}
+							Bearbetar transkriberingen… {summarizeStore.promptPercent}%
+						{:else}
+							Förbereder…
+						{/if}
+					</div>
+					{#if summarizeStore.promptPercent !== null}
+						<div class="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+							<div
+								class="h-full rounded-full bg-primary transition-all duration-300"
+								style="width: {summarizeStore.promptPercent}%"
+							></div>
+						</div>
+					{/if}
 				</div>
 			{/if}
 		</div>
@@ -244,7 +291,12 @@
 
 		<div class="space-y-3">
 			<h2 class="text-sm font-medium">Vad vill du skapa?</h2>
-			<TemplatePicker selectedId={selectedTemplate} onSelect={(id) => (selectedTemplate = id)} />
+			<TemplatePicker
+				selectedId={selectedTemplate}
+				onSelect={(id) => (selectedTemplate = id)}
+				onCreate={openCreateTemplate}
+				onEdit={openEditTemplate}
+			/>
 		</div>
 
 		<!-- Valfri agenda -->
@@ -325,3 +377,5 @@
 		onchange={onAgendaPicked}
 	/>
 </div>
+
+<TemplateEditorDialog bind:open={editorOpen} editId={editorEditId} onSaved={onTemplateSaved} />

@@ -53,6 +53,8 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	max_tokens: -1,
 	custom: '', // custom json-stringified object
 	contextSize: 4096,
+	// Loki 2.0: användarens egna sammanfattningsmallar (JSON-array av SummaryTemplate).
+	summaryTemplates: '[]',
 	// experimental features
 	enableContinueGeneration: false,
 	gpuIndex: -1

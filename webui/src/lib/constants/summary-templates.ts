@@ -30,7 +30,7 @@ export interface SummaryTemplate {
  * Gemensam instruktion som läggs först i varje inbyggd prompt. Håller modellen
  * trogen källan och språket, och undviker pratiga inledningar.
  */
-const COMMON_PREAMBLE =
+export const COMMON_PREAMBLE =
 	'Du är ett verktyg som bearbetar en transkribering av ett möte eller samtal. ' +
 	'Arbeta ENBART utifrån transkriberingens innehåll – hitta aldrig på fakta, namn, ' +
 	'beslut eller siffror som inte finns i texten. Svara på samma språk som ' +

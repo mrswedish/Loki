@@ -4,6 +4,7 @@ import {
 	roundCtx,
 	splitIntoChunks,
 	buildSystemPrompt,
+	buildMapPrompt,
 	MAX_CTX,
 	RESPONSE_MARGIN,
 	RESPONSE_MARGIN_THINKING
@@ -99,6 +100,15 @@ describe('buildSystemPrompt', () => {
 		const occurrences = out.split(PREAMBLE_PHRASE).length - 1;
 		expect(occurrences).toBe(1);
 		expect(builtinOut).toBe('BAS-PROMPT');
+	});
+});
+
+describe('buildMapPrompt', () => {
+	it('inkluderar mallens prompt + avsnitts-instruktion', () => {
+		const out = buildMapPrompt(TEMPLATE);
+		expect(out).toContain('BAS-PROMPT');
+		expect(out).toContain('ETT AVSNITT');
+		expect(out).toContain('Inget relevant i detta avsnitt');
 	});
 });
 

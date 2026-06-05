@@ -71,6 +71,23 @@ export function buildSystemPrompt(template: SummaryTemplate, agenda?: string): s
 }
 
 /**
+ * Bygger map-prompten för ett avsnitt vid chunkad sammanfattning. Återanvänder
+ * mallens system-prompt men instruerar modellen att detta är ETT avsnitt av ett
+ * längre möte och att svara "Inget relevant i detta avsnitt" om avsnittet bara
+ * innehåller kallprat. Agendan utelämnas i map-steget (appliceras i reduce).
+ */
+export function buildMapPrompt(template: SummaryTemplate): string {
+	const base = buildSystemPrompt(template);
+	return (
+		`${base}\n\n` +
+		'OBS: Detta är ETT AVSNITT av en längre transkribering, inte hela mötet. ' +
+		'Sammanfatta bara innehållet i detta avsnitt. Om avsnittet enbart innehåller ' +
+		'kallprat eller socialt småprat utan relevans, svara exakt: ' +
+		'"Inget relevant i detta avsnitt."'
+	);
+}
+
+/**
  * Räknar antalet tokens i en text via llama-serverns /tokenize-endpoint.
  * Exakt för den laddade modellens tokeniserare. Kastar vid serverfel.
  */

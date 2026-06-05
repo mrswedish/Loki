@@ -67,8 +67,24 @@
 			summarizeStore.result.length > 0
 	);
 
-	// Förlopps-text under körning: prompt-processing, tänkande, sedan generering.
+	// Vid chunkad sammanfattning: "del X av N" under map-fasen.
+	let chunkLabel = $derived(
+		summarizeStore.chunkProgress
+			? `del ${summarizeStore.chunkProgress.current} av ${summarizeStore.chunkProgress.total}`
+			: ''
+	);
+
+	// Förlopps-text under körning: chunk-läge, prompt-processing, tänkande, generering.
 	let progressText = $derived.by(() => {
+		if (chunkLabel) {
+			const inner =
+				summarizeStore.promptPercent !== null
+					? ` · ${summarizeStore.promptPercent}%`
+					: summarizeStore.generatedTokens > 0
+						? ` · ${summarizeStore.generatedTokens} tokens`
+						: '';
+			return `Sammanfattar ${chunkLabel}${inner}`;
+		}
 		if (summarizeStore.promptPercent !== null) {
 			return `Bearbetar ${summarizeStore.promptPercent}%`;
 		}
@@ -202,7 +218,11 @@
 				<div class="space-y-3">
 					<div class="flex items-center gap-2 text-sm text-muted-foreground">
 						<Loader2 class="size-4 animate-spin" />
-						{#if summarizeStore.promptPercent !== null}
+						{#if chunkLabel}
+							Sammanfattar {chunkLabel}…
+						{:else if summarizeStore.state === 'running' && summarizeStore.chunkProgress === null && info && info.strategy === 'chunked'}
+							Slår ihop delarna…
+						{:else if summarizeStore.promptPercent !== null}
 							Bearbetar transkriberingen… {summarizeStore.promptPercent}%
 						{:else if summarizeStore.isThinking}
 							Modellen tänker… {summarizeStore.thinkingTokens} tokens

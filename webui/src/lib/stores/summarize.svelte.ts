@@ -14,6 +14,7 @@ import {
 	RESPONSE_MARGIN_THINKING
 } from '$lib/services/summarize.service';
 import { LANGUAGE_REFINE_PROMPT } from '$lib/constants/summary-templates';
+import { samplingForModel } from '$lib/constants/model-sampling';
 import { getBuiltinTemplate, type SummaryTemplate } from '$lib/constants/summary-templates';
 import { MessageRole, MessageType } from '$lib/enums';
 import type { ApiChatMessageData } from '$lib/types/api';
@@ -256,12 +257,20 @@ class SummarizeStore {
 		messages: ApiChatMessageData[],
 		opts: { enableThinking: boolean }
 	): Promise<string> {
+		// Välj modell-anpassad sampling. En enda hårdkodad temperatur fungerar dåligt
+		// (Qwen utan presence_penalty upprepar sig och spårar ur). Profilen väljs
+		// utifrån vilken modell servern kör + thinking-läge.
+		const sampling = samplingForModel(serverStore.currentModelPath, opts.enableThinking);
 		let acc = '';
 		await ChatService.sendMessage(messages, {
 			stream: true,
 			enableThinking: opts.enableThinking,
-			temperature: 0.3,
 			max_tokens: -1,
+			temperature: sampling.temperature,
+			top_p: sampling.top_p,
+			top_k: sampling.top_k,
+			min_p: sampling.min_p,
+			presence_penalty: sampling.presence_penalty,
 			onChunk: (chunk: string) => {
 				acc += chunk;
 				this.result = ChatService.stripRawThinkTags(acc);

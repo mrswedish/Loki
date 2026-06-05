@@ -1,5 +1,6 @@
 import { FileText, ListChecks, ClipboardList, Gavel } from '@lucide/svelte';
 import type { Component } from 'svelte';
+import type { TemplateSampling } from '$lib/constants/model-sampling';
 
 /**
  * Mallar för Loki 2.0 sammanfattningsläge.
@@ -24,6 +25,8 @@ export interface SummaryTemplate {
 	systemPrompt: string;
 	/** True för inbyggda mallar, false/undefined för användarens egna. */
 	builtin?: boolean;
+	/** Valfria sampling-överstyrningar (temperatur m.m.). Saknas → modellens default. */
+	sampling?: TemplateSampling;
 }
 
 /**

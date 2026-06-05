@@ -190,7 +190,11 @@
 					{summarizeStore.meetingName || 'Sammanfattning'}
 				</h2>
 				<p class="text-xs text-muted-foreground">
-					{#if summarizeStore.phase === 'summarizing'}
+					{#if summarizeStore.phase === 'cleaning'}
+						<Loader2 class="mr-1 inline size-3 animate-spin" />Tvättar texten{chunkLabel
+							? ` · ${chunkLabel}`
+							: '…'}
+					{:else if summarizeStore.phase === 'summarizing'}
 						<Loader2 class="mr-1 inline size-3 animate-spin" />Sammanfattar med {summarizeStore.resultModel}{progressText
 							? ` · ${progressText}`
 							: '…'}
@@ -226,8 +230,12 @@
 				<div class="space-y-3">
 					<div class="flex items-center gap-2 text-sm text-muted-foreground">
 						<Loader2 class="size-4 animate-spin" />
-						{#if chunkLabel}
+						{#if chunkLabel && summarizeStore.phase === 'cleaning'}
+							Tvättar texten… {chunkLabel}
+						{:else if chunkLabel}
 							Sammanfattar {chunkLabel}…
+						{:else if summarizeStore.phase === 'cleaning'}
+							Tvättar texten…
 						{:else if summarizeStore.state === 'running' && summarizeStore.chunkProgress === null && info && info.strategy === 'chunked'}
 							Slår ihop delarna…
 						{:else if summarizeStore.promptPercent !== null}
@@ -409,12 +417,25 @@
 				{/if}
 			</Button>
 
-			<!-- Noggrannare = låt modellen resonera (thinking). Av som standard. -->
-			<div class="flex items-center gap-2">
-				<Switch id="thorough" bind:checked={summarizeStore.thorough} disabled={busy} />
-				<Label for="thorough" class="cursor-pointer text-sm text-muted-foreground">
-					Noggrannare
-				</Label>
+			<div class="flex items-center gap-4">
+				<!-- Tvätta texten först = laga STT-fel innan sammanfattningen (tvåstegsmetoden). -->
+				<div class="flex items-center gap-2">
+					<Switch id="clean-first" bind:checked={summarizeStore.cleanFirst} disabled={busy} />
+					<Label
+						for="clean-first"
+						class="cursor-pointer text-sm text-muted-foreground"
+						title="Lagar hörselfel i transkriberingen innan sammanfattningen. Ger bättre resultat men tar längre tid."
+					>
+						Tvätta först
+					</Label>
+				</div>
+				<!-- Noggrannare = låt modellen resonera (thinking). Av som standard. -->
+				<div class="flex items-center gap-2">
+					<Switch id="thorough" bind:checked={summarizeStore.thorough} disabled={busy} />
+					<Label for="thorough" class="cursor-pointer text-sm text-muted-foreground">
+						Noggrannare
+					</Label>
+				</div>
 			</div>
 		</div>
 	{/if}

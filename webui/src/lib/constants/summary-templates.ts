@@ -171,6 +171,25 @@ export const LANGUAGE_REFINE_PROMPT =
 	'kommentarer om vad du ändrat.';
 
 /**
+ * Prompt för det valfria tvätt-steget (tvåstegsmetoden). Körs FÖRE sammanfattningen
+ * och lagar bara språket – korrigerar STT-fel, fonetiska engelska termer och trasiga
+ * meningar – UTAN att sammanfatta, ta bort information eller ändra strukturen. Att
+ * låta modellen göra en sak i taget ger märkbart bättre resultat på små modeller.
+ */
+export const CLEANUP_PROMPT =
+	'Du är korrekturläsare för en rå transkribering från automatisk röstigenkänning (STT). ' +
+	'Texten innehåller hörselfel, fonetiska felstavningar (särskilt engelska IT- och facktermer ' +
+	'stavade som de låter på svenska) och avbrutna meningar.\n\n' +
+	'Din enda uppgift: korrigera språket utifrån sammanhanget.\n' +
+	'- Rätta uppenbara hörselfel och trasiga meningar till korrekt, professionell svenska.\n' +
+	'- Återge förvanskade engelska facktermer i sin korrekta form.\n' +
+	'- Kan du inte lista ut ett skevt ord, ersätt det med en neutral term hellre än att gissa ' +
+	'fritt eller hitta på en förklaring.\n\n' +
+	'VIKTIGT: Detta är BARA ett korrektursteg. Sammanfatta INTE, ta INTE bort information, ändra ' +
+	'INTE ordningen och lägg INTE till rubriker eller kommentarer. Behåll all text och dess ' +
+	'struktur. Leverera den korrigerade texten rakt upp och ner.';
+
+/**
  * Prompt för reduce-steget i chunkad sammanfattning. Slår ihop delsammanfattningar
  * (en per avsnitt av en lång transkribering) till ett sammanhängande dokument.
  * Kronologin från delarna bevaras strikt.

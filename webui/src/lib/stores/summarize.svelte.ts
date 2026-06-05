@@ -17,7 +17,11 @@ import {
 	RESPONSE_MARGIN,
 	RESPONSE_MARGIN_THINKING
 } from '$lib/services/summarize.service';
-import { LANGUAGE_REFINE_PROMPT, REDUCE_PROMPT } from '$lib/constants/summary-templates';
+import {
+	LANGUAGE_REFINE_PROMPT,
+	REDUCE_PROMPT,
+	CLEANUP_PROMPT
+} from '$lib/constants/summary-templates';
 import {
 	samplingForModel,
 	mergeSampling,
@@ -45,7 +49,7 @@ import { toast } from 'svelte-sonner';
 export type SummarizeState = 'idle' | 'reading' | 'preparing' | 'running' | 'done' | 'error';
 
 /** Vilket steg i pipelinen som körs (för UI-text). */
-export type SummarizePhase = 'summarizing' | 'refining' | null;
+export type SummarizePhase = 'cleaning' | 'summarizing' | 'refining' | null;
 
 /** Uppskattning som visas för användaren innan körning. */
 export interface TranscriptInfo {
@@ -80,6 +84,12 @@ class SummarizeStore {
 	meetingName = $state<string>('');
 	/** "Noggrannare": thinking på (av som standard). När på reserveras större ctx. */
 	thorough = $state<boolean>(false);
+	/**
+	 * "Tvätta texten först": kör ett separat korrektursteg (tvåstegsmetoden) som lagar
+	 * STT-fel innan sammanfattningen. Långsammare (ett extra pass) men ger märkbart
+	 * bättre resultat på små modeller. Av som standard.
+	 */
+	cleanFirst = $state<boolean>(false);
 
 	info = $state<TranscriptInfo | null>(null);
 
@@ -226,18 +236,36 @@ class SummarizeStore {
 		await this.ensureSummaryModel();
 		this.resultModel = this.currentModelName();
 
+		// Valfritt tvätt-steg (tvåstegsmetoden): laga STT-fel innan sammanfattningen.
+		// Den tvättade texten används för sammanfattningen; originalet bevaras i
+		// this.transcript (sparas i historiken som källa).
+		let sourceText = this.transcript;
+		if (this.cleanFirst) {
+			try {
+				this.state = 'running';
+				sourceText = await this.cleanText(template);
+			} catch (e) {
+				this.state = 'error';
+				this.phase = null;
+				this.error = e instanceof Error ? e.message : 'Tvätt-steget misslyckades.';
+				toast.error(this.error);
+				return;
+			}
+		}
+
 		// Proaktiv ctx: starta servern med exakt rätt storlek innan anropet.
-		await this.ensureContextFor(`${systemPrompt}\n\n${this.transcript}`, margin);
+		await this.ensureContextFor(`${systemPrompt}\n\n${sourceText}`, margin);
 
 		const messages: ApiChatMessageData[] = [
 			{ role: MessageRole.SYSTEM, content: systemPrompt },
-			{ role: MessageRole.USER, content: this.transcript }
+			{ role: MessageRole.USER, content: sourceText }
 		];
 
 		try {
 			this.state = 'running';
+			this.phase = 'summarizing';
 			if (this.info.strategy === 'chunked') {
-				await this.runChunked(template);
+				await this.runChunked(template, sourceText);
 			} else {
 				// Befintligt single-flöde (behåll exakt som det är):
 				const first = await this.stream(messages, {
@@ -270,12 +298,14 @@ class SummarizeStore {
 	}
 
 	/**
-	 * Chunkad map-reduce för transkriberingar som inte ryms i modellens kontext.
-	 * Map: dela texten, sammanfatta varje bit. Reduce: slå ihop kronologiskt.
-	 * Thinking är alltid AV i map-steget (stabilare/snabbare över många bitar).
+	 * Tvätt-steget (tvåstegsmetoden): lagar STT-fel i transkriberingen UTAN att
+	 * sammanfatta. Bevarar all text och struktur. För långa texter tvättas den bit
+	 * för bit och slås ihop till en lika lång ren text. Thinking alltid av.
+	 * Returnerar den tvättade texten.
 	 */
-	private async runChunked(template: SummaryTemplate): Promise<void> {
-		// Mät tecken-per-token för exakt delning (fallback ~4).
+	private async cleanText(template: SummaryTemplate): Promise<string> {
+		this.phase = 'cleaning';
+		// Mät tecken-per-token för delning (fallback ~4).
 		let charsPerToken = 4;
 		try {
 			const tokens = await countTokens(this.transcript);
@@ -283,8 +313,42 @@ class SummarizeStore {
 		} catch {
 			// behåll fallback
 		}
-
 		const chunks = splitIntoChunks(this.transcript, CHUNK_TOKEN_BUDGET, charsPerToken, 200);
+		const cleanedParts: string[] = [];
+		for (let i = 0; i < chunks.length; i++) {
+			this.chunkProgress = { current: i + 1, total: chunks.length };
+			this.result = '';
+			await this.ensureCtxForText(`${CLEANUP_PROMPT}\n\n${chunks[i]}`);
+			const messages: ApiChatMessageData[] = [
+				{ role: MessageRole.SYSTEM, content: CLEANUP_PROMPT },
+				{ role: MessageRole.USER, content: chunks[i] }
+			];
+			const { text } = await this.stream(messages, {
+				enableThinking: false,
+				sampling: template.sampling
+			});
+			cleanedParts.push(text.trim());
+		}
+		this.chunkProgress = null;
+		return cleanedParts.join('\n\n');
+	}
+
+	/**
+	 * Chunkad map-reduce för transkriberingar som inte ryms i modellens kontext.
+	 * Map: dela texten, sammanfatta varje bit. Reduce: slå ihop kronologiskt.
+	 * Thinking är alltid AV i map-steget (stabilare/snabbare över många bitar).
+	 */
+	private async runChunked(template: SummaryTemplate, sourceText: string): Promise<void> {
+		// Mät tecken-per-token för exakt delning (fallback ~4).
+		let charsPerToken = 4;
+		try {
+			const tokens = await countTokens(sourceText);
+			if (tokens > 0) charsPerToken = sourceText.length / tokens;
+		} catch {
+			// behåll fallback
+		}
+
+		const chunks = splitIntoChunks(sourceText, CHUNK_TOKEN_BUDGET, charsPerToken, 200);
 		const mapPrompt = buildMapPrompt(template);
 		const summaries: string[] = [];
 

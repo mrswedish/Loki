@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
 	samplingForModel,
+	mergeSampling,
 	QWEN_INSTRUCT,
 	QWEN_THINKING,
 	GEMMA_DEFAULT,
@@ -34,5 +35,33 @@ describe('samplingForModel', () => {
 	it('matchar oberoende av versaler i sökvägen', () => {
 		expect(samplingForModel('QWEN3.5.GGUF', false)).toEqual(QWEN_INSTRUCT);
 		expect(samplingForModel('GEMMA-4.GGUF', false)).toEqual(GEMMA_DEFAULT);
+	});
+});
+
+describe('mergeSampling', () => {
+	it('returnerar modell-defaulten oförändrad när mallen saknar sampling', () => {
+		const base = samplingForModel('Qwen3.5-4B.gguf', false);
+		expect(mergeSampling(base, undefined)).toEqual(base);
+		expect(mergeSampling(base, {})).toEqual(base);
+	});
+
+	it('låter mallens satta värden överstyra', () => {
+		const base = samplingForModel('google_gemma-4.gguf', false); // temp 1.0
+		const merged = mergeSampling(base, { temperature: 0.5 });
+		expect(merged.temperature).toBe(0.5);
+		expect(merged.top_p).toBe(base.top_p);
+	});
+
+	it('ignorerar undefined-fält i mallens sampling', () => {
+		const base = samplingForModel('Qwen3.5-4B.gguf', false);
+		const merged = mergeSampling(base, { temperature: undefined, presence_penalty: 0.5 });
+		expect(merged.temperature).toBe(base.temperature);
+		expect(merged.presence_penalty).toBe(0.5);
+	});
+
+	it('hanterar repeat_penalty-överstyrning', () => {
+		const base = samplingForModel('google_gemma-4.gguf', false);
+		const merged = mergeSampling(base, { repeat_penalty: 1.2 });
+		expect(merged.repeat_penalty).toBe(1.2);
 	});
 });

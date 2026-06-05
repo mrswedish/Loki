@@ -19,6 +19,7 @@ export interface SamplingProfile {
 	top_k: number;
 	min_p: number;
 	presence_penalty: number;
+	repeat_penalty: number;
 }
 
 /** Qwen3.5 i instruct/non-thinking-läge (sammanfattningens standard). */
@@ -27,7 +28,8 @@ export const QWEN_INSTRUCT: SamplingProfile = {
 	top_p: 0.8,
 	top_k: 20,
 	min_p: 0.0,
-	presence_penalty: 1.5
+	presence_penalty: 1.5,
+	repeat_penalty: 1.0
 };
 
 /** Qwen3.5 i thinking-läge ("Noggrannare", precisa uppgifter). */
@@ -36,7 +38,8 @@ export const QWEN_THINKING: SamplingProfile = {
 	top_p: 0.95,
 	top_k: 20,
 	min_p: 0.0,
-	presence_penalty: 1.5
+	presence_penalty: 1.5,
+	repeat_penalty: 1.0
 };
 
 /** Gemma 3/4 (Google-teamets rekommenderade standard). */
@@ -45,7 +48,8 @@ export const GEMMA_DEFAULT: SamplingProfile = {
 	top_p: 0.95,
 	top_k: 64,
 	min_p: 0.0,
-	presence_penalty: 0.0
+	presence_penalty: 0.0,
+	repeat_penalty: 1.0
 };
 
 /** Konservativ fallback för okända modeller – balanserad och repetitions-säker. */
@@ -54,7 +58,8 @@ export const GENERIC_DEFAULT: SamplingProfile = {
 	top_p: 0.9,
 	top_k: 40,
 	min_p: 0.0,
-	presence_penalty: 1.0
+	presence_penalty: 1.0,
+	repeat_penalty: 1.0
 };
 
 /**
@@ -71,4 +76,24 @@ export function samplingForModel(
 	if (name.includes('qwen')) return thinking ? QWEN_THINKING : QWEN_INSTRUCT;
 	if (name.includes('gemma')) return GEMMA_DEFAULT;
 	return GENERIC_DEFAULT;
+}
+
+/** Per-mall överstyrningar av sampling. Alla fält valfria; utelämnade ärver modell-default. */
+export interface TemplateSampling {
+	temperature?: number;
+	presence_penalty?: number;
+	repeat_penalty?: number;
+}
+
+/**
+ * Slår ihop modellens default-profil med en malls valfria överstyrningar.
+ * Endast definierade fält i `override` vinner; undefined ignoreras.
+ */
+export function mergeSampling(base: SamplingProfile, override?: TemplateSampling): SamplingProfile {
+	if (!override) return base;
+	const clean: Partial<SamplingProfile> = {};
+	if (override.temperature !== undefined) clean.temperature = override.temperature;
+	if (override.presence_penalty !== undefined) clean.presence_penalty = override.presence_penalty;
+	if (override.repeat_penalty !== undefined) clean.repeat_penalty = override.repeat_penalty;
+	return { ...base, ...clean };
 }

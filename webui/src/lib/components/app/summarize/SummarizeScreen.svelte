@@ -67,10 +67,13 @@
 			summarizeStore.result.length > 0
 	);
 
-	// Förlopps-text under körning: prompt-processing-procent, sedan tokens/sek.
+	// Förlopps-text under körning: prompt-processing, tänkande, sedan generering.
 	let progressText = $derived.by(() => {
 		if (summarizeStore.promptPercent !== null) {
 			return `Bearbetar ${summarizeStore.promptPercent}%`;
+		}
+		if (summarizeStore.isThinking) {
+			return `Tänker… ${summarizeStore.thinkingTokens} tokens`;
 		}
 		if (summarizeStore.generatedTokens > 0) {
 			const tps = summarizeStore.tokensPerSec;
@@ -199,6 +202,8 @@
 						<Loader2 class="size-4 animate-spin" />
 						{#if summarizeStore.promptPercent !== null}
 							Bearbetar transkriberingen… {summarizeStore.promptPercent}%
+						{:else if summarizeStore.isThinking}
+							Modellen tänker… {summarizeStore.thinkingTokens} tokens
 						{:else}
 							Förbereder…
 						{/if}

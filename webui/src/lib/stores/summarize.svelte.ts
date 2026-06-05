@@ -52,6 +52,13 @@ export interface TranscriptInfo {
 /** Gemma-modellens id i registret – används för språkrättningssteget. */
 const REFINE_MODEL_ID = 'gemma-4-e2b';
 
+/**
+ * Tak för antal reasoning-tokens (thinking) innan vi avbryter och kör om utan
+ * thinking. Små modeller (Qwen 4B) kan annars resonera i oändlighet utan att nå
+ * svaret. ~2500 ger gott om tankeutrymme men garanterar att vi inte fastnar.
+ */
+const MAX_THINKING_TOKENS = 2500;
+
 class SummarizeStore {
 	state = $state<SummarizeState>('idle');
 	phase = $state<SummarizePhase>(null);
@@ -79,6 +86,10 @@ class SummarizeStore {
 	promptPercent = $state<number | null>(null);
 	generatedTokens = $state<number>(0);
 	tokensPerSec = $state<number>(0);
+	/** Antal reasoning-tokens (thinking) hittills – visas som "Tänker… X". */
+	thinkingTokens = $state<number>(0);
+	/** True medan modellen är i thinking-fasen (inget svar ännu). */
+	isThinking = $state<boolean>(false);
 	/** Konversations-id i historiken för denna körning. */
 	private convId: string | null = null;
 	/** Db-id för assistant-meddelandet (uppdateras vid språkrättning). */
@@ -114,6 +125,8 @@ class SummarizeStore {
 		this.promptPercent = null;
 		this.generatedTokens = 0;
 		this.tokensPerSec = 0;
+		this.thinkingTokens = 0;
+		this.isThinking = false;
 	}
 
 	/** Läser en transkriberingsfil, räknar tokens och beräknar uppskattning. */
@@ -206,8 +219,15 @@ class SummarizeStore {
 
 		try {
 			this.state = 'running';
-			const output = await this.stream(messages, { enableThinking: this.thorough });
-			await this.saveToHistory(output);
+			const first = await this.stream(messages, { enableThinking: this.thorough });
+			let text = first.text;
+			// Modellen fastnade i oändligt resonemang – kör om utan thinking så att ett
+			// resultat garanteras (annars väntar användaren för evigt).
+			if (first.hitThinkingCap) {
+				toast.info('Modellen tänkte för länge – kör om utan tankeläge.');
+				text = (await this.stream(messages, { enableThinking: false })).text;
+			}
+			await this.saveToHistory(text);
 			this.state = 'done';
 		} catch (e) {
 			this.state = 'error';
@@ -252,7 +272,7 @@ class SummarizeStore {
 				{ role: MessageRole.USER, content: original }
 			];
 			// Gemma är ingen thinking-modell – kör utan.
-			const refined = await this.stream(messages, { enableThinking: false });
+			const { text: refined } = await this.stream(messages, { enableThinking: false });
 			this.refined = true;
 			await this.updateHistory(refined);
 			this.state = 'done';
@@ -274,50 +294,80 @@ class SummarizeStore {
 	private async stream(
 		messages: ApiChatMessageData[],
 		opts: { enableThinking: boolean }
-	): Promise<string> {
+	): Promise<{ text: string; hitThinkingCap: boolean }> {
 		// Välj modell-anpassad sampling. En enda hårdkodad temperatur fungerar dåligt
 		// (Qwen utan presence_penalty upprepar sig och spårar ur). Profilen väljs
 		// utifrån vilken modell servern kör + thinking-läge.
 		const sampling = samplingForModel(serverStore.currentModelPath, opts.enableThinking);
 		this.resetProgress();
+
+		// Tak för thinking: små modeller (Qwen 4B) kan annars resonera i oändlighet
+		// och aldrig nå svaret. Når reasoning-tokens taket avbryter vi och anroparen
+		// kör om utan thinking så ett resultat garanteras.
+		const controller = new AbortController();
+		let reasoningChars = 0;
+		let hitThinkingCap = false;
 		let acc = '';
-		await ChatService.sendMessage(messages, {
-			stream: true,
-			enableThinking: opts.enableThinking,
-			max_tokens: -1,
-			temperature: sampling.temperature,
-			top_p: sampling.top_p,
-			top_k: sampling.top_k,
-			min_p: sampling.min_p,
-			presence_penalty: sampling.presence_penalty,
-			onChunk: (chunk: string) => {
-				acc += chunk;
-				this.result = ChatService.stripRawThinkTags(acc);
-			},
-			onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
-				// Prompt-processing-fas (innan första token): visa procent.
-				if (promptProgress && promptProgress.total > 0) {
-					this.promptPercent = Math.min(
-						100,
-						Math.round((promptProgress.processed / promptProgress.total) * 100)
-					);
-				}
-				// Genereringsfas: visa antal tokens + tokens/sek.
-				if (timings?.predicted_n) {
-					this.promptPercent = null; // prompt klar – vi genererar nu
-					this.generatedTokens = timings.predicted_n;
-					if (timings.predicted_ms) {
-						this.tokensPerSec = (timings.predicted_n / timings.predicted_ms) * 1000;
+
+		try {
+			await ChatService.sendMessage(
+				messages,
+				{
+					stream: true,
+					enableThinking: opts.enableThinking,
+					max_tokens: -1,
+					temperature: sampling.temperature,
+					top_p: sampling.top_p,
+					top_k: sampling.top_k,
+					min_p: sampling.min_p,
+					presence_penalty: sampling.presence_penalty,
+					onChunk: (chunk: string) => {
+						// Första content-token → tänkandet är klart.
+						this.isThinking = false;
+						acc += chunk;
+						this.result = ChatService.stripRawThinkTags(acc);
+					},
+					onReasoningChunk: (chunk: string) => {
+						this.isThinking = true;
+						reasoningChars += chunk.length;
+						// Uppskatta tokens (~4 tecken/token) för statusvisningen.
+						this.thinkingTokens = Math.round(reasoningChars / 4);
+						if (this.thinkingTokens >= MAX_THINKING_TOKENS && !controller.signal.aborted) {
+							hitThinkingCap = true;
+							controller.abort();
+						}
+					},
+					onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
+						if (promptProgress && promptProgress.total > 0) {
+							this.promptPercent = Math.min(
+								100,
+								Math.round((promptProgress.processed / promptProgress.total) * 100)
+							);
+						}
+						if (timings?.predicted_n) {
+							this.promptPercent = null;
+							this.generatedTokens = timings.predicted_n;
+							if (timings.predicted_ms) {
+								this.tokensPerSec = (timings.predicted_n / timings.predicted_ms) * 1000;
+							}
+						}
+					},
+					onError: (err: Error) => {
+						throw err;
 					}
-				}
-			},
-			onError: (err: Error) => {
-				throw err;
-			}
-		});
+				},
+				undefined,
+				controller.signal
+			);
+		} catch (e) {
+			// Abort pga thinking-taket är förväntat – svälj det, anroparen kör om.
+			if (!hitThinkingCap) throw e;
+		}
+
+		this.isThinking = false;
 		const final = ChatService.stripRawThinkTags(acc).trim();
 		this.result = final;
-		return final;
+		return { text: final, hitThinkingCap };
 	}
 
 	/**

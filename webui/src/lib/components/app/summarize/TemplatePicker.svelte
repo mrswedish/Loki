@@ -1,16 +1,17 @@
 <script lang="ts">
 	import { summaryTemplatesStore } from '$lib/stores/summary-templates.svelte';
 	import { cn } from '$lib/components/ui/utils';
-	import { Plus, Pencil } from '@lucide/svelte';
+	import { Plus, Pencil, Copy } from '@lucide/svelte';
 
 	interface Props {
 		selectedId: string;
 		onSelect: (id: string) => void;
 		onCreate: () => void;
 		onEdit: (id: string) => void;
+		onDuplicate: (id: string) => void;
 	}
 
-	let { selectedId, onSelect, onCreate, onEdit }: Props = $props();
+	let { selectedId, onSelect, onCreate, onEdit, onDuplicate }: Props = $props();
 
 	let all = $derived(summaryTemplatesStore.all);
 </script>
@@ -44,16 +45,28 @@
 				<span class="text-sm font-medium">{template.label}</span>
 				<span class="text-xs leading-snug text-muted-foreground">{template.description}</span>
 			</button>
-			{#if !template.builtin}
+			<div
+				class="absolute top-2 right-2 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100"
+			>
 				<button
 					type="button"
-					title="Redigera mall"
-					onclick={() => onEdit(template.id)}
-					class="absolute top-2 right-2 rounded p-1 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
+					title="Kopiera mall (skapa redigerbar kopia)"
+					onclick={() => onDuplicate(template.id)}
+					class="rounded p-1 text-muted-foreground hover:text-foreground"
 				>
-					<Pencil class="size-3.5" />
+					<Copy class="size-3.5" />
 				</button>
-			{/if}
+				{#if !template.builtin}
+					<button
+						type="button"
+						title="Redigera mall"
+						onclick={() => onEdit(template.id)}
+						class="rounded p-1 text-muted-foreground hover:text-foreground"
+					>
+						<Pencil class="size-3.5" />
+					</button>
+				{/if}
+			</div>
 		</div>
 	{/each}
 

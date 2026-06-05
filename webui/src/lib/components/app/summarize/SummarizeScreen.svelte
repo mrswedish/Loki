@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { summarizeStore } from '$lib/stores/summarize.svelte';
+	import { summaryTemplatesStore } from '$lib/stores/summary-templates.svelte';
 	import { DEFAULT_TEMPLATE_ID } from '$lib/constants/summary-templates';
 	import TemplatePicker from './TemplatePicker.svelte';
 	import TemplateEditorDialog from './TemplateEditorDialog.svelte';
@@ -9,7 +10,7 @@
 	import { Switch } from '$lib/components/ui/switch';
 	import { cn } from '$lib/components/ui/utils';
 	import { MarkdownContent } from '$lib/components/app/content';
-	import { copyToClipboard } from '$lib/utils';
+	import { copyToClipboard, copyRichToClipboard, stripReasoningAndMarkdown } from '$lib/utils';
 	import { saveTextFile } from '$lib/tauri-bridge';
 	import { toast } from 'svelte-sonner';
 	import {
@@ -23,7 +24,8 @@
 		Copy,
 		Download,
 		Languages,
-		Plus
+		Plus,
+		FileType
 	} from '@lucide/svelte';
 
 	let isDragOver = $state(false);
@@ -39,6 +41,15 @@
 	function openEditTemplate(id: string) {
 		editorEditId = id;
 		editorOpen = true;
+	}
+	// Duplicera valfri mall (även inbyggd) till en redigerbar kopia och öppna den.
+	function duplicateTemplate(id: string) {
+		const newId = summaryTemplatesStore.duplicate(id);
+		if (newId) {
+			selectedTemplate = newId;
+			editorEditId = newId;
+			editorOpen = true;
+		}
 	}
 	function onTemplateSaved(id: string) {
 		selectedTemplate = id;
@@ -69,13 +80,29 @@
 		return '';
 	});
 
+	// Kopiera som ren, läsbar text (inga **/##) – funkar i mejl/Word/anteckningar.
 	async function copyResult() {
-		await copyToClipboard(summarizeStore.result, 'Kopierat!', 'Kunde inte kopiera');
+		await copyToClipboard(
+			stripReasoningAndMarkdown(summarizeStore.result),
+			'Kopierat!',
+			'Kunde inte kopiera'
+		);
 	}
 
+	// Kopiera som formaterad text (HTML på urklipp). Word/Outlook/Docs tolkar
+	// HTML:en → riktiga rubriker, fetstil och listor vid inklistring.
+	async function copyResultForWord() {
+		await copyRichToClipboard(
+			summarizeStore.result,
+			'Kopierat med formatering – klistra in i Word',
+			'Kunde inte kopiera'
+		);
+	}
+
+	// Exportera som ren text-fil.
 	async function exportResult() {
 		try {
-			await saveTextFile(summarizeStore.result);
+			await saveTextFile(stripReasoningAndMarkdown(summarizeStore.result));
 			toast.success('Sparat');
 		} catch {
 			toast.error('Kunde inte spara filen');
@@ -204,6 +231,10 @@
 					<Copy class="size-4" />
 					Kopiera
 				</Button>
+				<Button variant="outline" onclick={copyResultForWord} disabled={busy} class="gap-2">
+					<FileType class="size-4" />
+					Kopiera till Word
+				</Button>
 				<Button variant="outline" onclick={exportResult} disabled={busy} class="gap-2">
 					<Download class="size-4" />
 					Exportera
@@ -296,6 +327,7 @@
 				onSelect={(id) => (selectedTemplate = id)}
 				onCreate={openCreateTemplate}
 				onEdit={openEditTemplate}
+				onDuplicate={duplicateTemplate}
 			/>
 		</div>
 

@@ -49,10 +49,14 @@ export interface StrategyDecision {
  */
 export function buildSystemPrompt(template: SummaryTemplate, agenda?: string): string {
 	// Egna mallar har inte trohets-preamblen inbyggd (inbyggda mallar har den) –
-	// prependa den så även användarens egna mallar håller sig troget källan.
-	const base = template.builtin
-		? template.systemPrompt
-		: `${COMMON_PREAMBLE}\n\n${template.systemPrompt}`;
+	// prependa den så även användarens egna mallar håller sig troget källan. Lägg
+	// inte på den om prompten redan innehåller den (t.ex. en kopia av en inbyggd
+	// mall, vars prompt redan har preambeln) – annars dubbleras instruktionen.
+	const hasPreamble = template.systemPrompt.includes(COMMON_PREAMBLE.slice(0, 60));
+	const base =
+		template.builtin || hasPreamble
+			? template.systemPrompt
+			: `${COMMON_PREAMBLE}\n\n${template.systemPrompt}`;
 	const trimmed = agenda?.trim();
 	if (!trimmed) return base;
 

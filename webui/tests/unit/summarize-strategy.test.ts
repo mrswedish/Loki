@@ -75,6 +75,28 @@ describe('buildSystemPrompt', () => {
 		expect(out).toContain('2. Personal');
 		expect(out).toContain('Övrigt');
 	});
+
+	it('lägger trohets-preambeln på egna mallar (builtin: false)', () => {
+		const custom: SummaryTemplate = { ...TEMPLATE, builtin: false };
+		const out = buildSystemPrompt(custom);
+		expect(out).toContain('BAS-PROMPT');
+		expect(out).toContain('trogen källan'); // del av COMMON_PREAMBLE
+	});
+
+	it('dubblerar inte preambeln om den redan finns i prompten (kopia av inbyggd)', () => {
+		const builtinOut = buildSystemPrompt(TEMPLATE); // = BAS-PROMPT (TEMPLATE saknar preambel)
+		// Simulera en kopia av en inbyggd mall: prompten innehåller redan preambeln.
+		const copyOfBuiltin: SummaryTemplate = {
+			...TEMPLATE,
+			builtin: false,
+			systemPrompt: buildSystemPrompt({ ...TEMPLATE, builtin: false }) // har preambel
+		};
+		const out = buildSystemPrompt(copyOfBuiltin);
+		// Preambelns kärnfras får bara förekomma en gång.
+		const occurrences = out.split('trogen källan').length - 1;
+		expect(occurrences).toBe(1);
+		expect(builtinOut).toBe('BAS-PROMPT');
+	});
 });
 
 describe('splitIntoChunks', () => {

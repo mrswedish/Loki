@@ -61,6 +61,22 @@ class SummaryTemplatesStore {
 		return id;
 	}
 
+	/**
+	 * Duplicerar en befintlig mall (inbyggd eller egen) till en ny redigerbar egen
+	 * mall. För inbyggda mallar måste promptens fulla text (inkl. trohets-preambeln)
+	 * fångas så att kopian beter sig likadant – inbyggda mallar har preambeln inbakad
+	 * i systemPrompt, så vi kopierar den rakt av. Returnerar den nya mallens id.
+	 */
+	duplicate(id: string): string | null {
+		const source = this.get(id);
+		if (!source) return null;
+		return this.create({
+			label: `${source.label} (kopia)`,
+			description: source.description,
+			systemPrompt: source.systemPrompt
+		});
+	}
+
 	/** Uppdaterar en befintlig egen mall. */
 	update(id: string, data: { label: string; description: string; systemPrompt: string }): void {
 		const next = this.custom.map((t) =>

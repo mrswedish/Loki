@@ -67,14 +67,17 @@
 	}
 
 	function buildSampling(): import('$lib/constants/model-sampling').TemplateSampling | undefined {
-		const num = (s: string) => {
+		// Parsa + klampa till rimliga intervall så felinmatning (negativt, absurda
+		// värden) inte skickas till servern. Ogiltigt/tomt → undefined (ärver default).
+		const num = (s: string, min: number, max: number) => {
 			const n = parseFloat(s.replace(',', '.'));
-			return Number.isFinite(n) ? n : undefined;
+			if (!Number.isFinite(n)) return undefined;
+			return Math.min(Math.max(n, min), max);
 		};
 		const s = {
-			temperature: num(temperature),
-			presence_penalty: num(presencePenalty),
-			repeat_penalty: num(repeatPenalty)
+			temperature: num(temperature, 0, 2),
+			presence_penalty: num(presencePenalty, 0, 2),
+			repeat_penalty: num(repeatPenalty, 0.5, 2)
 		};
 		const hasAny =
 			s.temperature !== undefined ||

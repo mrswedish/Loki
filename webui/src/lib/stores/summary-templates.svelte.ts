@@ -1,5 +1,6 @@
 import { settingsStore, config } from '$lib/stores/settings.svelte';
 import { SUMMARY_TEMPLATES, type SummaryTemplate } from '$lib/constants/summary-templates';
+import type { TemplateSampling } from '$lib/constants/model-sampling';
 
 /**
  * Hanterar användarens egna sammanfattningsmallar (utöver de inbyggda).
@@ -42,20 +43,27 @@ class SummaryTemplatesStore {
 			label: t.label,
 			description: t.description,
 			systemPrompt: t.systemPrompt,
-			builtin: false
+			builtin: false,
+			sampling: t.sampling
 		}));
 		settingsStore.updateConfig('summaryTemplates', JSON.stringify(plain));
 	}
 
 	/** Skapar en ny egen mall och returnerar dess id. */
-	create(data: { label: string; description: string; systemPrompt: string }): string {
+	create(data: {
+		label: string;
+		description: string;
+		systemPrompt: string;
+		sampling?: TemplateSampling;
+	}): string {
 		const id = newId();
 		const template: SummaryTemplate = {
 			id,
 			label: data.label.trim() || 'Egen mall',
 			description: data.description.trim(),
 			systemPrompt: data.systemPrompt.trim(),
-			builtin: false
+			builtin: false,
+			sampling: data.sampling
 		};
 		this.persist([...this.custom, template]);
 		return id;
@@ -73,19 +81,29 @@ class SummaryTemplatesStore {
 		return this.create({
 			label: `${source.label} (kopia)`,
 			description: source.description,
-			systemPrompt: source.systemPrompt
+			systemPrompt: source.systemPrompt,
+			sampling: source.sampling
 		});
 	}
 
 	/** Uppdaterar en befintlig egen mall. */
-	update(id: string, data: { label: string; description: string; systemPrompt: string }): void {
+	update(
+		id: string,
+		data: {
+			label: string;
+			description: string;
+			systemPrompt: string;
+			sampling?: TemplateSampling;
+		}
+	): void {
 		const next = this.custom.map((t) =>
 			t.id === id
 				? {
 						...t,
 						label: data.label.trim() || t.label,
 						description: data.description.trim(),
-						systemPrompt: data.systemPrompt.trim()
+						systemPrompt: data.systemPrompt.trim(),
+						sampling: data.sampling
 					}
 				: t
 		);

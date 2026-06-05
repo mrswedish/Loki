@@ -7,7 +7,8 @@
 	import { summaryTemplatesStore } from '$lib/stores/summary-templates.svelte';
 	import { processFilesToChatUploaded } from '$lib/utils/process-uploaded-files';
 	import { toast } from 'svelte-sonner';
-	import { FileUp, Trash2 } from '@lucide/svelte';
+	import { FileUp, Trash2, ChevronDown } from '@lucide/svelte';
+	import * as Collapsible from '$lib/components/ui/collapsible';
 
 	interface Props {
 		open?: boolean;
@@ -22,6 +23,11 @@
 	let label = $state('');
 	let description = $state('');
 	let systemPrompt = $state('');
+	// Sampling-överstyrningar. Tomt fält = ärv modellens default.
+	let temperature = $state('');
+	let presencePenalty = $state('');
+	let repeatPenalty = $state('');
+	let advancedOpen = $state(false);
 	let fileInput: HTMLInputElement;
 
 	let isEditing = $derived(!!editId);
@@ -33,6 +39,10 @@
 			label = existing?.label ?? '';
 			description = existing?.description ?? '';
 			systemPrompt = existing?.systemPrompt ?? '';
+			temperature = existing?.sampling?.temperature?.toString() ?? '';
+			presencePenalty = existing?.sampling?.presence_penalty?.toString() ?? '';
+			repeatPenalty = existing?.sampling?.repeat_penalty?.toString() ?? '';
+			advancedOpen = !!existing?.sampling;
 		}
 	});
 
@@ -56,12 +66,35 @@
 		}
 	}
 
+	function buildSampling(): import('$lib/constants/model-sampling').TemplateSampling | undefined {
+		const num = (s: string) => {
+			const n = parseFloat(s.replace(',', '.'));
+			return Number.isFinite(n) ? n : undefined;
+		};
+		const s = {
+			temperature: num(temperature),
+			presence_penalty: num(presencePenalty),
+			repeat_penalty: num(repeatPenalty)
+		};
+		const hasAny =
+			s.temperature !== undefined ||
+			s.presence_penalty !== undefined ||
+			s.repeat_penalty !== undefined;
+		return hasAny ? s : undefined;
+	}
+
+	function resetSampling() {
+		temperature = '';
+		presencePenalty = '';
+		repeatPenalty = '';
+	}
+
 	function save() {
 		if (!systemPrompt.trim()) {
 			toast.error('Skriv en instruktion för mallen.');
 			return;
 		}
-		const data = { label, description, systemPrompt };
+		const data = { label, description, systemPrompt, sampling: buildSampling() };
 		const id = editId
 			? (summaryTemplatesStore.update(editId, data), editId)
 			: summaryTemplatesStore.create(data);
@@ -125,6 +158,47 @@
 						Trohet mot källan (inga omskrivningar) läggs till automatiskt.
 					</p>
 				</div>
+				<Collapsible.Root bind:open={advancedOpen}>
+					<Collapsible.Trigger
+						class="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+					>
+						<ChevronDown
+							class={'size-4 transition-transform ' + (advancedOpen ? 'rotate-180' : '')}
+						/>
+						Avancerat (sampling)
+					</Collapsible.Trigger>
+					<Collapsible.Content class="space-y-4 pt-3">
+						<div class="space-y-1.5">
+							<Label for="tpl-temp">Temperatur</Label>
+							<Input id="tpl-temp" bind:value={temperature} placeholder="modellens standard" />
+							<p class="text-xs text-muted-foreground">
+								Lägre = mer förutsägbart och troget källan, högre = mer kreativt. Lämna tomt för
+								modellens standard. Typiskt 0.3–0.8 för protokoll.
+							</p>
+						</div>
+						<div class="space-y-1.5">
+							<Label for="tpl-presence">Upprepningsstraff</Label>
+							<Input
+								id="tpl-presence"
+								bind:value={presencePenalty}
+								placeholder="modellens standard"
+							/>
+							<p class="text-xs text-muted-foreground">
+								Högre värde (0–2) motverkar att modellen upprepar sig.
+							</p>
+						</div>
+						<div class="space-y-1.5">
+							<Label for="tpl-repeat">Repetitionsstraff</Label>
+							<Input id="tpl-repeat" bind:value={repeatPenalty} placeholder="modellens standard" />
+							<p class="text-xs text-muted-foreground">
+								Alternativt straff mot upprepning (typiskt 1.0–1.3).
+							</p>
+						</div>
+						<Button variant="ghost" size="sm" class="text-xs" onclick={resetSampling}>
+							Återställ till modellens standard
+						</Button>
+					</Collapsible.Content>
+				</Collapsible.Root>
 			</div>
 
 			<Dialog.Footer class="flex items-center justify-between gap-2 sm:justify-between">

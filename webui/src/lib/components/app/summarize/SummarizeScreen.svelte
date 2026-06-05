@@ -175,7 +175,9 @@
 							? ` · ${progressText}`
 							: '…'}
 					{:else}
-						Skapad med {summarizeStore.resultModel}{summarizeStore.refined ? ' · språkrättad' : ''}
+						Skapad med {summarizeStore.resultModel}{summarizeStore.usedTemperature !== null
+							? ` · temp ${summarizeStore.usedTemperature}`
+							: ''}{summarizeStore.refined ? ' · språkrättad' : ''}
 					{/if}
 				</p>
 			</div>

@@ -49,7 +49,7 @@ import { toast } from 'svelte-sonner';
 export type SummarizeState = 'idle' | 'reading' | 'preparing' | 'running' | 'done' | 'error';
 
 /** Vilket steg i pipelinen som körs (för UI-text). */
-export type SummarizePhase = 'cleaning' | 'summarizing' | 'refining' | null;
+export type SummarizePhase = 'summarizing' | 'refining' | null;
 
 /** Uppskattning som visas för användaren innan körning. */
 export interface TranscriptInfo {
@@ -84,12 +84,6 @@ class SummarizeStore {
 	meetingName = $state<string>('');
 	/** "Noggrannare": thinking på (av som standard). När på reserveras större ctx. */
 	thorough = $state<boolean>(false);
-	/**
-	 * "Tvätta texten först": kör ett separat korrektursteg (tvåstegsmetoden) som lagar
-	 * STT-fel innan sammanfattningen. Långsammare (ett extra pass) men ger märkbart
-	 * bättre resultat på små modeller. Av som standard.
-	 */
-	cleanFirst = $state<boolean>(false);
 
 	info = $state<TranscriptInfo | null>(null);
 
@@ -236,22 +230,27 @@ class SummarizeStore {
 		await this.ensureSummaryModel();
 		this.resultModel = this.currentModelName();
 
-		// Valfritt tvätt-steg (tvåstegsmetoden): laga STT-fel innan sammanfattningen.
-		// Den tvättade texten används för sammanfattningen; originalet bevaras i
-		// this.transcript (sparas i historiken som källa).
-		let sourceText = this.transcript;
-		if (this.cleanFirst) {
+		// Tvätt-mallen ("Rätta transkriberingen") producerar den rena transkriberingen
+		// som resultat i stället för en sammanfattning.
+		if (template.id === 'transcription-cleanup') {
 			try {
 				this.state = 'running';
-				sourceText = await this.cleanText(template);
+				const cleaned = await this.cleanText(template);
+				this.result = cleaned;
+				await this.saveToHistory(cleaned);
+				this.state = 'done';
 			} catch (e) {
 				this.state = 'error';
-				this.phase = null;
-				this.error = e instanceof Error ? e.message : 'Tvätt-steget misslyckades.';
+				this.error = e instanceof Error ? e.message : 'Rättningen misslyckades.';
 				toast.error(this.error);
-				return;
+			} finally {
+				this.phase = null;
+				this.chunkProgress = null;
 			}
+			return;
 		}
+
+		const sourceText = this.transcript;
 
 		// Proaktiv ctx: starta servern med exakt rätt storlek innan anropet.
 		await this.ensureContextFor(`${systemPrompt}\n\n${sourceText}`, margin);
@@ -304,7 +303,7 @@ class SummarizeStore {
 	 * Returnerar den tvättade texten.
 	 */
 	private async cleanText(template: SummaryTemplate): Promise<string> {
-		this.phase = 'cleaning';
+		this.phase = 'summarizing';
 		// Mät tecken-per-token för delning (fallback ~4).
 		let charsPerToken = 4;
 		try {

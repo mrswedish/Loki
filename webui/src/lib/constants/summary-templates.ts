@@ -1,4 +1,4 @@
-import { NotebookPen, FileText, ListChecks, ClipboardList, Gavel } from '@lucide/svelte';
+import { NotebookPen, FileText, ListChecks, ClipboardList, Gavel, Eraser } from '@lucide/svelte';
 import type { Component } from 'svelte';
 import type { TemplateSampling } from '$lib/constants/model-sampling';
 
@@ -70,6 +70,25 @@ export const COMMON_PREAMBLE =
 	'Sammanfatta vad diskussionen landade i – skriv inte av dialogen rakt av.\n\n' +
 	'Svara på samma språk som transkriberingen (oftast svenska). Skriv inga inledande eller ' +
 	'avslutande kommentarer om uppgiften – leverera bara det begärda dokumentet i Markdown.';
+
+/**
+ * Prompt för tvätt-steget: korrigerar STT-fel, fonetiska engelska termer och trasiga
+ * meningar – UTAN att sammanfatta, ta bort information eller ändra strukturen. Att
+ * låta modellen göra en sak i taget ger märkbart bättre resultat på små modeller.
+ * Används av mallen "Rätta transkriberingen" som producerar den rena texten som resultat.
+ */
+export const CLEANUP_PROMPT =
+	'Du är korrekturläsare för en rå transkribering från automatisk röstigenkänning (STT). ' +
+	'Texten innehåller hörselfel, fonetiska felstavningar (särskilt engelska IT- och facktermer ' +
+	'stavade som de låter på svenska) och avbrutna meningar.\n\n' +
+	'Din enda uppgift: korrigera språket utifrån sammanhanget.\n' +
+	'- Rätta uppenbara hörselfel och trasiga meningar till korrekt, professionell svenska.\n' +
+	'- Återge förvanskade engelska facktermer i sin korrekta form.\n' +
+	'- Kan du inte lista ut ett skevt ord, ersätt det med en neutral term hellre än att gissa ' +
+	'fritt eller hitta på en förklaring.\n\n' +
+	'VIKTIGT: Detta är BARA ett korrektursteg. Sammanfatta INTE, ta INTE bort information, ändra ' +
+	'INTE ordningen och lägg INTE till rubriker eller kommentarer. Behåll all text och dess ' +
+	'struktur. Leverera den korrigerade texten rakt upp och ner.';
 
 export const SUMMARY_TEMPLATES: SummaryTemplate[] = [
 	{
@@ -149,6 +168,15 @@ export const SUMMARY_TEMPLATES: SummaryTemplate[] = [
 			'beslut, ange på en egen rad: **Beslut:** vad som beslutades, och **Motivering:** den ' +
 			'motivering eller det resonemang som framgår av samtalet. Utelämna motivering om den ' +
 			'inte framgår. Om inga beslut fattas, skriv "Inga beslut fattades."'
+	},
+	{
+		id: 'transcription-cleanup',
+		label: 'Rätta transkriberingen',
+		description: 'Korrigera feltolkningar utan att sammanfatta',
+		icon: Eraser,
+		builtin: true,
+		sampling: STRICT_SAMPLING,
+		systemPrompt: CLEANUP_PROMPT
 	}
 ];
 
@@ -169,25 +197,6 @@ export const LANGUAGE_REFINE_PROMPT =
 	'citat mot synonymer, och inför inga metaforer eller bildspråk. Rätta bara det som är ' +
 	'språkligt fel. Behåll Markdown-formatet. Svara enbart med det rättade dokumentet – inga ' +
 	'kommentarer om vad du ändrat.';
-
-/**
- * Prompt för det valfria tvätt-steget (tvåstegsmetoden). Körs FÖRE sammanfattningen
- * och lagar bara språket – korrigerar STT-fel, fonetiska engelska termer och trasiga
- * meningar – UTAN att sammanfatta, ta bort information eller ändra strukturen. Att
- * låta modellen göra en sak i taget ger märkbart bättre resultat på små modeller.
- */
-export const CLEANUP_PROMPT =
-	'Du är korrekturläsare för en rå transkribering från automatisk röstigenkänning (STT). ' +
-	'Texten innehåller hörselfel, fonetiska felstavningar (särskilt engelska IT- och facktermer ' +
-	'stavade som de låter på svenska) och avbrutna meningar.\n\n' +
-	'Din enda uppgift: korrigera språket utifrån sammanhanget.\n' +
-	'- Rätta uppenbara hörselfel och trasiga meningar till korrekt, professionell svenska.\n' +
-	'- Återge förvanskade engelska facktermer i sin korrekta form.\n' +
-	'- Kan du inte lista ut ett skevt ord, ersätt det med en neutral term hellre än att gissa ' +
-	'fritt eller hitta på en förklaring.\n\n' +
-	'VIKTIGT: Detta är BARA ett korrektursteg. Sammanfatta INTE, ta INTE bort information, ändra ' +
-	'INTE ordningen och lägg INTE till rubriker eller kommentarer. Behåll all text och dess ' +
-	'struktur. Leverera den korrigerade texten rakt upp och ner.';
 
 /**
  * Prompt för reduce-steget i chunkad sammanfattning. Slår ihop delsammanfattningar

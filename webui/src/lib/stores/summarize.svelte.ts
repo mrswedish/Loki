@@ -2,7 +2,12 @@ import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 import { isTauriEnv } from '$lib/server-url';
-import { startServer, listAvailableModels, listLocalModels } from '$lib/tauri-bridge';
+import {
+	startServer,
+	listAvailableModels,
+	listLocalModels,
+	getSystemInfo
+} from '$lib/tauri-bridge';
 import { processFilesToChatUploaded } from '$lib/utils/process-uploaded-files';
 import { ChatService } from '$lib/services/chat.service';
 import { DatabaseService } from '$lib/services/database.service';
@@ -15,7 +20,8 @@ import {
 	isEmptyChunkResponse,
 	MAX_CTX,
 	RESPONSE_MARGIN,
-	RESPONSE_MARGIN_THINKING
+	RESPONSE_MARGIN_THINKING,
+	safeCtxCeiling
 } from '$lib/services/summarize.service';
 import {
 	LANGUAGE_REFINE_PROMPT,
@@ -120,6 +126,30 @@ class SummarizeStore {
 	 */
 	private summaryModelPath: string | null = null;
 
+	/** Cachat ctx-tak (RAM-medvetet) för aktuell modell. Beräknas en gång per körning. */
+	private cachedCtxCeiling: number | null = null;
+
+	/**
+	 * Räknar ut ett säkert ctx-tak utifrån systemets RAM och den aktiva modellens
+	 * storlek. Cachas under en körning. Faller tillbaka till odefinierat (→ pickStrategy
+	 * använder MAX_CTX) utanför Tauri eller om info saknas.
+	 */
+	private async ctxCeiling(): Promise<number | undefined> {
+		if (!isTauriEnv()) return undefined;
+		if (this.cachedCtxCeiling !== null) return this.cachedCtxCeiling;
+		try {
+			const [sys, models] = await Promise.all([getSystemInfo(), listAvailableModels()]);
+			const path = (serverStore.currentModelPath ?? '').replace(/\\/g, '/');
+			const file = path.split('/').pop() ?? '';
+			const entry = models.find((m) => m.filename === file);
+			const ceiling = safeCtxCeiling(sys.total_ram_gb, entry?.size_bytes);
+			this.cachedCtxCeiling = ceiling;
+			return ceiling;
+		} catch {
+			return undefined;
+		}
+	}
+
 	get busy(): boolean {
 		return this.state === 'reading' || this.state === 'preparing' || this.state === 'running';
 	}
@@ -169,7 +199,8 @@ class SummarizeStore {
 			}
 
 			const margin = this.thorough ? RESPONSE_MARGIN_THINKING : RESPONSE_MARGIN;
-			const { strategy } = pickStrategy(tokens, serverStore.contextSize ?? undefined, margin);
+			const ceiling = await this.ctxCeiling();
+			const { strategy } = pickStrategy(tokens, ceiling, margin);
 
 			this.info = {
 				fileName: file.name,
@@ -219,6 +250,7 @@ class SummarizeStore {
 		this.error = null;
 		this.result = '';
 		this.refined = false;
+		this.cachedCtxCeiling = null;
 
 		const systemPrompt = buildSystemPrompt(template, this.agenda || undefined);
 		const margin = this.thorough ? RESPONSE_MARGIN_THINKING : RESPONSE_MARGIN;
@@ -430,11 +462,8 @@ class SummarizeStore {
 			} catch {
 				promptTokens = Math.ceil(promptText.length / 4);
 			}
-			const { ctx } = pickStrategy(
-				promptTokens,
-				serverStore.contextSize ?? undefined,
-				RESPONSE_MARGIN
-			);
+			const ceiling = await this.ctxCeiling();
+			const { ctx } = pickStrategy(promptTokens, ceiling, RESPONSE_MARGIN);
 			const modelPath = serverStore.currentModelPath;
 			const gpuIndex = (config().gpuIndex as number) ?? -1;
 			if (modelPath && ctx > (serverStore.contextSize ?? 0)) {
@@ -674,7 +703,8 @@ class SummarizeStore {
 			} catch {
 				promptTokens = Math.ceil(promptText.length / 4);
 			}
-			const { ctx } = pickStrategy(promptTokens, serverStore.contextSize ?? undefined, margin);
+			const ceiling = await this.ctxCeiling();
+			const { ctx } = pickStrategy(promptTokens, ceiling, margin);
 			const modelPath = serverStore.currentModelPath;
 			const gpuIndex = (config().gpuIndex as number) ?? -1;
 			if (modelPath && ctx > (serverStore.contextSize ?? 0)) {

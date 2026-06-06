@@ -6,6 +6,7 @@ import {
 	buildSystemPrompt,
 	buildMapPrompt,
 	isEmptyChunkResponse,
+	safeCtxCeiling,
 	MAX_CTX,
 	RESPONSE_MARGIN,
 	RESPONSE_MARGIN_THINKING
@@ -110,6 +111,36 @@ describe('buildMapPrompt', () => {
 		expect(out).toContain('BAS-PROMPT');
 		expect(out).toContain('ETT AVSNITT');
 		expect(out).toContain('Inget relevant i detta avsnitt');
+	});
+});
+
+describe('safeCtxCeiling', () => {
+	const GB = 1_000_000_000;
+
+	it('faller tillbaka till MAX_CTX när RAM-info saknas', () => {
+		expect(safeCtxCeiling(null, 6.7 * GB)).toBe(MAX_CTX);
+		expect(safeCtxCeiling(0, 6.7 * GB)).toBe(MAX_CTX);
+	});
+
+	it('begränsar 12B på 16 GB till ~32k (säkert, inte 128k)', () => {
+		const ceiling = safeCtxCeiling(16, 6.7 * GB);
+		expect(ceiling).toBeGreaterThanOrEqual(24_000);
+		expect(ceiling).toBeLessThanOrEqual(40_000);
+	});
+
+	it('ger en liten modell mer utrymme på samma RAM', () => {
+		const small = safeCtxCeiling(16, 3.5 * GB); // E2B
+		const big = safeCtxCeiling(16, 6.7 * GB); // 12B
+		expect(small).toBeGreaterThan(big);
+	});
+
+	it('klampar till minst 8k när minnet är knappt', () => {
+		// 12B på en maskin med bara 8 GB → väldigt lite KV-budget.
+		expect(safeCtxCeiling(8, 6.7 * GB)).toBe(8192);
+	});
+
+	it('överstiger aldrig MAX_CTX', () => {
+		expect(safeCtxCeiling(256, 3.5 * GB)).toBeLessThanOrEqual(MAX_CTX);
 	});
 });
 

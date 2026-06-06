@@ -122,13 +122,12 @@
 		Kraftfull: 'bg-red-500/15 text-red-600 dark:text-red-400'
 	};
 
-	function ramStatus(model: ModelStatus): 'ok' | 'tight' | 'insufficient' {
-		if (!systemInfo.available_ram_gb || !model.ram_required_gb) return 'ok';
-		const avail = systemInfo.available_ram_gb;
-		const req = model.ram_required_gb;
-		if (req > avail * 1.1) return 'insufficient';
-		if (req > avail * 0.85) return 'tight';
-		return 'ok';
+	// RAM-status mot TOTALT systemminne (inte bara ledigt): en modell kan köras på CPU
+	// så länge systemet har minnet, även om iGPU:ns VRAM inte räcker. Vi BLOCKERAR aldrig
+	// – bara varnar. "tight" = knappt/kräver CPU (informativ varning), aldrig "insufficient".
+	function ramStatus(model: ModelStatus): 'ok' | 'tight' {
+		if (!systemInfo.total_ram_gb || !model.ram_required_gb) return 'ok';
+		return model.ram_required_gb > systemInfo.total_ram_gb * 0.9 ? 'tight' : 'ok';
 	}
 </script>
 
@@ -209,19 +208,12 @@
 													] ?? 'bg-muted text-muted-foreground'}">{model.flavor}</span
 												>
 											{/if}
-											{#if ramStatus(model) === 'insufficient'}
+											{#if ramStatus(model) === 'tight'}
 												<span
-													title="Troligen för lite RAM ({model.ram_required_gb} GB krävs, {systemInfo.available_ram_gb.toFixed(
-														1
-													)} GB tillgängligt)"
-													class="text-xs text-red-500">⚠ RAM</span
-												>
-											{:else if ramStatus(model) === 'tight'}
-												<span
-													title="Kan vara trög ({model.ram_required_gb} GB krävs, {systemInfo.available_ram_gb.toFixed(
-														1
-													)} GB tillgängligt)"
-													class="text-xs text-yellow-500">⚠</span
+													title="Kräver ~{model.ram_required_gb} GB RAM (du har {systemInfo.total_ram_gb.toFixed(
+														0
+													)} GB). Körs på CPU om GPU-minnet inte räcker – långsammare."
+													class="text-xs text-yellow-500">⚠ kräver mycket RAM</span
 												>
 											{/if}
 										</div>
@@ -301,11 +293,7 @@
 					</p>
 					<div class="space-y-1.5">
 						{#each notDownloaded as model}
-							<div
-								class="rounded-md border border-border p-3 {ramStatus(model) === 'insufficient'
-									? 'opacity-55'
-									: ''}"
-							>
+							<div class="rounded-md border border-border p-3">
 								<div class="flex items-center justify-between">
 									<div>
 										<div class="flex items-center gap-2">
@@ -317,20 +305,13 @@
 													] ?? 'bg-muted text-muted-foreground'}">{model.flavor}</span
 												>
 											{/if}
-											{#if ramStatus(model) === 'insufficient'}
+											{#if ramStatus(model) === 'tight'}
 												<span
-													title="Troligen för lite RAM ({model.ram_required_gb} GB krävs, {systemInfo.available_ram_gb.toFixed(
-														1
-													)} GB tillgängligt)"
-													class="text-xs text-red-500"
-													>⚠ Kräver {model.ram_required_gb} GB RAM</span
-												>
-											{:else if ramStatus(model) === 'tight'}
-												<span
-													title="Kan vara trög ({model.ram_required_gb} GB krävs, {systemInfo.available_ram_gb.toFixed(
-														1
-													)} GB tillgängligt)"
-													class="text-xs text-yellow-500">⚠</span
+													title="Kräver ~{model.ram_required_gb} GB RAM (du har {systemInfo.total_ram_gb.toFixed(
+														0
+													)} GB). Körs på CPU om GPU-minnet inte räcker – långsammare."
+													class="text-xs text-yellow-500"
+													>⚠ kräver ~{model.ram_required_gb} GB RAM</span
 												>
 											{/if}
 										</div>

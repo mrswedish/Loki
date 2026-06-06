@@ -19,7 +19,7 @@ import { COMMON_PREAMBLE, type SummaryTemplate } from '$lib/constants/summary-te
 export const MAX_CTX = 131_072;
 
 /** Marginal i tokens reserverad för modellens svar utöver prompten (thinking av). */
-export const RESPONSE_MARGIN = 2048;
+export const RESPONSE_MARGIN = 4096;
 
 /**
  * Marginal när thinking är på ("Noggrannare"). Resonemanget skrivs ut före svaret
@@ -27,6 +27,38 @@ export const RESPONSE_MARGIN = 2048;
  * hinner både tänka och svara utan att slå i taket.
  */
 export const RESPONSE_MARGIN_THINKING = 10_240;
+
+/**
+ * Beräknar ett SÄKERT tak för kontextfönstret baserat på tillgängligt RAM och
+ * modellens storlek. KV-cachen växer linjärt med kontextstorleken och kan spränga
+ * minnet långt innan modellens teoretiska maxkontext (t.ex. Gemma 12B på 16 GB
+ * klarar ~32k, men 128k+ kräver 24 GB+). Vi laddar därför inte ett större fönster
+ * än vad minnet säkert rymmer – långa texter chunkas i stället.
+ *
+ * Heuristiken är medvetet FÖRSIKTIG (hellre chunka för tidigt än krascha):
+ * minnet som blir kvar efter modellvikterna får användas till KV-cache, och vi
+ * räknar konservativt ~1,5 GB KV per 32k tokens. Faller tillbaka till MAX_CTX om
+ * RAM-info saknas (icke-Tauri / okänt).
+ *
+ * @param totalRamGb     Totalt systemminne i GB (CPU-körning kan nyttja allt).
+ * @param modelSizeBytes Modellfilens storlek i bytes (ungefär modellvikternas RAM).
+ */
+export function safeCtxCeiling(
+	totalRamGb: number | null | undefined,
+	modelSizeBytes: number | null | undefined
+): number {
+	if (!totalRamGb || totalRamGb <= 0) return MAX_CTX;
+	const modelGb = modelSizeBytes ? modelSizeBytes / 1_000_000_000 : 4;
+	// Reservera ~2 GB för OS/app; resten efter modellvikterna får gå till KV-cache.
+	const kvBudgetGb = Math.max(0, totalRamGb - modelGb - 2);
+	// KV-cachen per token skalar med modellens storlek (fler lager = större cache).
+	// Kalibrerat mot verkligheten: en ~6,7 GB 12B-modell använder ~7 GB KV vid 32k →
+	// ca 4500 tokens/GB. Mindre modeller får fler tokens/GB. Konservativ skalning:
+	const tokensPerGb = 30_000 / modelGb;
+	const ceiling = roundCtx(kvBudgetGb * tokensPerGb);
+	// Klampa till [8k, MAX_CTX] – aldrig under 8k (minsta vettiga), aldrig över taket.
+	return Math.min(Math.max(ceiling, 8192), MAX_CTX);
+}
 
 /** llama.cpp /tokenize-svar. */
 interface TokenizeResponse {

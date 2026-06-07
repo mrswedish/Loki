@@ -244,11 +244,13 @@ class SummarizeStore {
 	}
 
 	/**
-	 * Den effektiva samplingen för en körning: när "Kreativare tolkning" är på överstyr
-	 * vi mallens sampling med CREATIVE_SAMPLING (högre temp), annars används mallens egen.
+	 * Den effektiva samplingen för en körning. När "Kreativare tolkning" är på höjer vi
+	 * temperaturen via CREATIVE_SAMPLING men behåller mallens övriga parametrar (CREATIVE_SAMPLING
+	 * vinner bara där de överlappar), annars används mallens egen sampling.
 	 */
 	private effSampling(template: SummaryTemplate): TemplateSampling | undefined {
-		return this.creative ? CREATIVE_SAMPLING : template.sampling;
+		if (!this.creative) return template.sampling;
+		return { ...template.sampling, ...CREATIVE_SAMPLING };
 	}
 
 	/**

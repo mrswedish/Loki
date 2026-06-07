@@ -55,6 +55,8 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	contextSize: 4096,
 	// Loki 2.0: användarens egna sammanfattningsmallar (JSON-array av SummaryTemplate).
 	summaryTemplates: '[]',
+	// Loki 2.0: sparade kontext-förval (JSON-array av { id, label, text }).
+	summaryContexts: '[]',
 	// experimental features
 	enableContinueGeneration: false,
 	gpuIndex: -1

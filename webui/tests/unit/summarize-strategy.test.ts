@@ -11,10 +11,19 @@ import {
 	RESPONSE_MARGIN,
 	RESPONSE_MARGIN_THINKING
 } from '$lib/services/summarize.service';
-import { COMMON_PREAMBLE, type SummaryTemplate } from '$lib/constants/summary-templates';
+import {
+	COMMON_PREAMBLE,
+	CONTEXT_INSTRUCTION,
+	type SummaryTemplate
+} from '$lib/constants/summary-templates';
 
 /** En stabil delfras ur preambeln (de första 30 tecknen) som inte hårdkodas. */
 const PREAMBLE_PHRASE = COMMON_PREAMBLE.slice(0, 30);
+
+/** Stabila delfraser ur kontext-instruktionerna (hårdkoda inte hela texten). */
+const CONTEXT_PHRASE = CONTEXT_INSTRUCTION.slice(0, 30);
+/** En fras som BARA finns i den kreativa varianten ("forma tonen"). */
+const CREATIVE_PHRASE = 'forma tonen';
 
 const TEMPLATE: SummaryTemplate = {
 	id: 'test',
@@ -111,6 +120,40 @@ describe('buildMapPrompt', () => {
 		expect(out).toContain('BAS-PROMPT');
 		expect(out).toContain('ETT AVSNITT');
 		expect(out).toContain('Inget relevant i detta avsnitt');
+	});
+
+	it('inkluderar kontexten + kreativ instruktion när creative är på', () => {
+		const out = buildMapPrompt(TEMPLATE, 'rehabprocess sjukvård', true);
+		expect(out).toContain('rehabprocess sjukvård');
+		expect(out).toContain(CREATIVE_PHRASE);
+	});
+});
+
+describe('buildSystemPrompt – kontext', () => {
+	it('injicerar kontexten med strikt instruktion (creative av, default)', () => {
+		const out = buildSystemPrompt(TEMPLATE, undefined, 'rehabprocess sjukvård');
+		expect(out).toContain(CONTEXT_PHRASE);
+		expect(out).toContain('rehabprocess sjukvård');
+		expect(out).not.toContain(CREATIVE_PHRASE);
+	});
+
+	it('använder kreativ instruktion när creative är på', () => {
+		const out = buildSystemPrompt(TEMPLATE, undefined, 'rehabprocess sjukvård', true);
+		expect(out).toContain(CREATIVE_PHRASE);
+		expect(out).toContain('rehabprocess sjukvård');
+	});
+
+	it('placerar kontexten FÖRE agendan', () => {
+		const out = buildSystemPrompt(TEMPLATE, '1. Budget', 'rehabprocess sjukvård');
+		expect(out).toContain('rehabprocess sjukvård');
+		expect(out).toContain('STRUKTUR ENLIGT AGENDA');
+		expect(out.indexOf('rehabprocess sjukvård')).toBeLessThan(out.indexOf('STRUKTUR ENLIGT AGENDA'));
+	});
+
+	it('ingen kontext → ingen kontext-instruktion (ingen regression)', () => {
+		const out = buildSystemPrompt(TEMPLATE);
+		expect(out).toBe('BAS-PROMPT');
+		expect(out).not.toContain(CONTEXT_PHRASE);
 	});
 });
 

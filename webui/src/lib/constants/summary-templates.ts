@@ -90,6 +90,33 @@ export const CLEANUP_PROMPT =
 	'INTE ordningen och lägg INTE till rubriker eller kommentarer. Behåll all text och dess ' +
 	'struktur. Leverera den korrigerade texten rakt upp och ner.';
 
+/**
+ * Kontext-instruktion när "Kreativare tolkning" är AV (standard): användarens beskrivning
+ * av mötets domän/sammanhang används BARA som tolkningshjälp – för att rätta feltolkade
+ * fackuttryck och förkortningar – utan att styra innehåll/ton eller lägga till något.
+ * Användarens kontexttext läggs direkt efter denna instruktion.
+ */
+export const CONTEXT_INSTRUCTION =
+	'SAMMANHANG: Detta möte rör följande verksamhet/domän (använd det BARA för att tolka ' +
+	'oklara ord, fackuttryck och förkortningar rätt – det styr INTE vad som ska tas med och ' +
+	'du får ALDRIG lägga till information som inte finns i transkriberingen):';
+
+/**
+ * Kontext-instruktion när "Kreativare tolkning" är PÅ: domänen får också forma ton och
+ * struktur med visst kreativt utrymme, men förbudet mot att hitta på fakta kvarstår.
+ */
+export const CONTEXT_INSTRUCTION_CREATIVE =
+	'SAMMANHANG: Detta möte rör följande verksamhet/domän. Använd det för att tolka oklara ord ' +
+	'och fackuttryck rätt, och låt domänen forma tonen och strukturen så att dokumentet känns ' +
+	'naturligt för sammanhanget. Du får formulera dig friare, MEN du får ALDRIG hitta på fakta, ' +
+	'namn, beslut eller siffror som inte finns i transkriberingen:';
+
+/**
+ * Sampling för "Kreativare tolkning": högre temperatur än STRICT_SAMPLING för mer språkligt
+ * flyt. Överstyr mallens sampling när växeln är på.
+ */
+export const CREATIVE_SAMPLING: TemplateSampling = { temperature: 0.3, repeat_penalty: 1.1 };
+
 export const SUMMARY_TEMPLATES: SummaryTemplate[] = [
 	{
 		id: 'meeting-notes',

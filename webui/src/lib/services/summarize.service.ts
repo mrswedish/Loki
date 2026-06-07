@@ -1,5 +1,10 @@
 import { apiPost } from '$lib/utils/api-fetch';
-import { COMMON_PREAMBLE, type SummaryTemplate } from '$lib/constants/summary-templates';
+import {
+	COMMON_PREAMBLE,
+	CONTEXT_INSTRUCTION,
+	CONTEXT_INSTRUCTION_CREATIVE,
+	type SummaryTemplate
+} from '$lib/constants/summary-templates';
 
 /**
  * SummarizeService – kärnlogik för Loki 2.0 sammanfattningsläge.
@@ -74,12 +79,20 @@ export interface StrategyDecision {
 
 /**
  * Bygger den slutliga system-prompten för en körning: mallens prompt, plus ett
- * valfritt agenda-block som styr protokollet att följa agendans punkter.
+ * valfritt kontext-block (mötets domän/sammanhang) och ett valfritt agenda-block
+ * som styr protokollet att följa agendans punkter.
  *
  * @param template  Vald mall (inbyggd eller egen).
  * @param agenda    Råtext från en uppladdad agenda (.txt/.pdf), eller undefined.
+ * @param context   Användarens fritext om mötets domän/sammanhang, eller undefined.
+ * @param creative  "Kreativare tolkning" på → kontexten får forma ton/struktur friare.
  */
-export function buildSystemPrompt(template: SummaryTemplate, agenda?: string): string {
+export function buildSystemPrompt(
+	template: SummaryTemplate,
+	agenda?: string,
+	context?: string,
+	creative = false
+): string {
 	// Egna mallar har inte trohets-preamblen inbyggd (inbyggda mallar har den) –
 	// prependa den så även användarens egna mallar håller sig troget källan. Lägg
 	// inte på den om prompten redan innehåller den (t.ex. en kopia av en inbyggd
@@ -89,11 +102,18 @@ export function buildSystemPrompt(template: SummaryTemplate, agenda?: string): s
 		template.builtin || hasPreamble
 			? template.systemPrompt
 			: `${COMMON_PREAMBLE}\n\n${template.systemPrompt}`;
+
+	// Kontext-blocket läggs FÖRE agendan (så agendan kan referera domänen). Instruktionens
+	// styrka beror på "Kreativare tolkning"-växeln.
+	const ctx = context?.trim();
+	const instr = creative ? CONTEXT_INSTRUCTION_CREATIVE : CONTEXT_INSTRUCTION;
+	const withContext = ctx ? `${base}\n\n${instr}\n${ctx}` : base;
+
 	const trimmed = agenda?.trim();
-	if (!trimmed) return base;
+	if (!trimmed) return withContext;
 
 	return (
-		`${base}\n\n` +
+		`${withContext}\n\n` +
 		'STRUKTUR ENLIGT AGENDA: Strukturera dokumentet efter agendan nedan. Använd ' +
 		'agendans punkter som rubriker i den ordning de står. Placera det som diskuterades ' +
 		'under rätt agendapunkt. Punkter som togs upp men inte finns på agendan samlas under ' +
@@ -106,10 +126,15 @@ export function buildSystemPrompt(template: SummaryTemplate, agenda?: string): s
  * Bygger map-prompten för ett avsnitt vid chunkad sammanfattning. Återanvänder
  * mallens system-prompt men instruerar modellen att detta är ETT avsnitt av ett
  * längre möte och att svara "Inget relevant i detta avsnitt" om avsnittet bara
- * innehåller kallprat. Agendan utelämnas i map-steget (appliceras i reduce).
+ * innehåller kallprat. Agendan utelämnas i map-steget (appliceras i reduce), men
+ * kontexten följer med – fackordstolkningen behövs per avsnitt.
  */
-export function buildMapPrompt(template: SummaryTemplate): string {
-	const base = buildSystemPrompt(template);
+export function buildMapPrompt(
+	template: SummaryTemplate,
+	context?: string,
+	creative = false
+): string {
+	const base = buildSystemPrompt(template, undefined, context, creative);
 	return (
 		`${base}\n\n` +
 		'OBS: Detta är ETT AVSNITT av en längre transkribering, inte hela mötet. ' +

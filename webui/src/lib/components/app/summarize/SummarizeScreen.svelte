@@ -1,11 +1,13 @@
 <script lang="ts">
 	import { summarizeStore } from '$lib/stores/summarize.svelte';
 	import { summaryTemplatesStore } from '$lib/stores/summary-templates.svelte';
+	import { summaryContextsStore } from '$lib/stores/summary-contexts.svelte';
 	import { DEFAULT_TEMPLATE_ID } from '$lib/constants/summary-templates';
 	import TemplatePicker from './TemplatePicker.svelte';
 	import TemplateEditorDialog from './TemplateEditorDialog.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { Textarea } from '$lib/components/ui/textarea';
 	import { Label } from '$lib/components/ui/label';
 	import { Switch } from '$lib/components/ui/switch';
 	import { cn } from '$lib/components/ui/utils';
@@ -25,7 +27,9 @@
 		Download,
 		Languages,
 		Plus,
-		FileType
+		FileType,
+		Wand2,
+		Bookmark
 	} from '@lucide/svelte';
 
 	let isDragOver = $state(false);
@@ -62,6 +66,21 @@
 		if (selectedTemplate === id) selectedTemplate = DEFAULT_TEMPLATE_ID;
 		toast.success('Mall raderad');
 	}
+
+	// Sparar nuvarande kontexttext som ett namngivet förval.
+	function saveContextPreset() {
+		const text = summarizeStore.context.trim();
+		if (!text) return;
+		const label = prompt('Namn på förvalet (t.ex. "Rehabmöte sjukvård"):')?.trim();
+		if (!label) return;
+		summaryContextsStore.add(label, text);
+		toast.success('Sammanhang sparat som förval');
+	}
+
+	// Sant om nuvarande kontexttext redan motsvarar ett sparat förval (döljer "Spara").
+	let contextMatchesPreset = $derived(
+		summaryContextsStore.all.some((c) => c.text.trim() === summarizeStore.context.trim())
+	);
 
 	let transcriptInput: HTMLInputElement;
 	let agendaInput: HTMLInputElement;
@@ -367,6 +386,61 @@
 			/>
 		</div>
 
+		<!-- Valfritt sammanhang/domän (tolkningshjälp för modellen) -->
+		<div class="space-y-2">
+			<Label for="context" class="text-sm font-medium">Beskriv mötet/sammanhanget (valfritt)</Label>
+			<Textarea
+				id="context"
+				bind:value={summarizeStore.context}
+				disabled={busy}
+				rows={2}
+				placeholder="T.ex. avstämningsmöte i rehabprocessen inom regionvården, eller tekniskt IT-/driftmöte. Hjälper modellen tolka fackord och förkortningar rätt."
+				class="resize-none"
+			/>
+			<!-- Sparade förval + spara nuvarande -->
+			<div class="flex flex-wrap items-center gap-1.5">
+				{#each summaryContextsStore.all as preset (preset.id)}
+					<div
+						class={cn(
+							'group inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition-colors',
+							summarizeStore.context.trim() === preset.text.trim()
+								? 'border-primary bg-primary/10 text-foreground'
+								: 'border-border text-muted-foreground hover:text-foreground'
+						)}
+					>
+						<button
+							type="button"
+							onclick={() => (summarizeStore.context = preset.text)}
+							disabled={busy}
+							class="disabled:opacity-50"
+						>
+							{preset.label}
+						</button>
+						<button
+							type="button"
+							onclick={() => summaryContextsStore.remove(preset.id)}
+							disabled={busy}
+							class="opacity-0 transition-opacity group-hover:opacity-100 disabled:opacity-50"
+							aria-label="Ta bort förval"
+						>
+							<X class="size-3" />
+						</button>
+					</div>
+				{/each}
+				{#if summarizeStore.context.trim() && !contextMatchesPreset}
+					<button
+						type="button"
+						onclick={saveContextPreset}
+						disabled={busy}
+						class="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+					>
+						<Bookmark class="size-3" />
+						Spara som förval
+					</button>
+				{/if}
+			</div>
+		</div>
+
 		<!-- Valfri agenda -->
 		<div class="space-y-2">
 			{#if summarizeStore.agenda}
@@ -410,6 +484,17 @@
 			</Button>
 
 			<div class="flex items-center gap-4">
+				<!-- Kreativare tolkning = låt sammanhanget forma ton/struktur + höj temp. Av som standard. -->
+				<div
+					class="flex items-center gap-2"
+					title="Låter sammanhanget forma ton och struktur friare (men hittar aldrig på fakta)."
+				>
+					<Switch id="creative" bind:checked={summarizeStore.creative} disabled={busy} />
+					<Label for="creative" class="flex cursor-pointer items-center gap-1 text-sm text-muted-foreground">
+						<Wand2 class="size-3.5" />
+						Kreativare tolkning
+					</Label>
+				</div>
 				<!-- Noggrannare = låt modellen resonera (thinking). Av som standard. -->
 				<div class="flex items-center gap-2">
 					<Switch id="thorough" bind:checked={summarizeStore.thorough} disabled={busy} />

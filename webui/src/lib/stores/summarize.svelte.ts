@@ -26,7 +26,10 @@ import {
 import {
 	LANGUAGE_REFINE_PROMPT,
 	REDUCE_PROMPT,
-	CLEANUP_PROMPT
+	CLEANUP_PROMPT,
+	CONTEXT_INSTRUCTION,
+	CONTEXT_INSTRUCTION_CREATIVE,
+	CREATIVE_SAMPLING
 } from '$lib/constants/summary-templates';
 import {
 	samplingForModel,
@@ -87,9 +90,13 @@ class SummarizeStore {
 
 	transcript = $state<string>('');
 	agenda = $state<string>('');
+	/** Fritext om mötets domän/sammanhang (tolkningshjälp). Bevaras mellan körningar. */
+	context = $state<string>('');
 	meetingName = $state<string>('');
 	/** "Noggrannare": thinking på (av som standard). När på reserveras större ctx. */
 	thorough = $state<boolean>(false);
+	/** "Kreativare tolkning": låter kontexten forma ton/struktur + höjer temperaturen. */
+	creative = $state<boolean>(false);
 
 	info = $state<TranscriptInfo | null>(null);
 
@@ -232,6 +239,29 @@ class SummarizeStore {
 		this.agenda = '';
 	}
 
+	clearContext(): void {
+		this.context = '';
+	}
+
+	/**
+	 * Den effektiva samplingen för en körning: när "Kreativare tolkning" är på överstyr
+	 * vi mallens sampling med CREATIVE_SAMPLING (högre temp), annars används mallens egen.
+	 */
+	private effSampling(template: SummaryTemplate): TemplateSampling | undefined {
+		return this.creative ? CREATIVE_SAMPLING : template.sampling;
+	}
+
+	/**
+	 * Kontext-blocket att lägga till i en system-prompt som byggs utanför buildSystemPrompt
+	 * (t.ex. CLEANUP_PROMPT och REDUCE_PROMPT). Tom sträng om ingen kontext angetts.
+	 */
+	private contextBlock(): string {
+		const ctx = this.context.trim();
+		if (!ctx) return '';
+		const instr = this.creative ? CONTEXT_INSTRUCTION_CREATIVE : CONTEXT_INSTRUCTION;
+		return `\n\n${instr}\n${ctx}`;
+	}
+
 	/** Kör sammanfattningen med vald mall och streamar resultatet till `result`. */
 	async run(templateId: string, customTemplate?: SummaryTemplate): Promise<void> {
 		if (!this.transcript || !this.info) {
@@ -252,7 +282,12 @@ class SummarizeStore {
 		this.refined = false;
 		this.cachedCtxCeiling = null;
 
-		const systemPrompt = buildSystemPrompt(template, this.agenda || undefined);
+		const systemPrompt = buildSystemPrompt(
+			template,
+			this.agenda || undefined,
+			this.context || undefined,
+			this.creative
+		);
 		const margin = this.thorough ? RESPONSE_MARGIN_THINKING : RESPONSE_MARGIN;
 
 		// Säkerställ rätt sammanfattningsmodell. Om en tidigare körning språkrättades
@@ -299,9 +334,10 @@ class SummarizeStore {
 				await this.runChunked(template, sourceText);
 			} else {
 				// Befintligt single-flöde (behåll exakt som det är):
+				const sampling = this.effSampling(template);
 				const first = await this.stream(messages, {
 					enableThinking: this.thorough,
-					sampling: template.sampling
+					sampling
 				});
 				let text = first.text;
 				// Modellen fastnade i oändligt resonemang – kör om utan thinking så att ett
@@ -311,7 +347,7 @@ class SummarizeStore {
 					text = (
 						await this.stream(messages, {
 							enableThinking: false,
-							sampling: template.sampling
+							sampling
 						})
 					).text;
 				}
@@ -345,18 +381,21 @@ class SummarizeStore {
 			// behåll fallback
 		}
 		const chunks = splitIntoChunks(this.transcript, CHUNK_TOKEN_BUDGET, charsPerToken, 200);
+		// Kontexten hjälper mest vid tvätt (facktermsrättning) – lägg den i system-prompten.
+		const cleanupSystem = `${CLEANUP_PROMPT}${this.contextBlock()}`;
+		const sampling = this.effSampling(template);
 		const cleanedParts: string[] = [];
 		for (let i = 0; i < chunks.length; i++) {
 			this.chunkProgress = { current: i + 1, total: chunks.length };
 			this.result = '';
-			await this.ensureCtxForText(`${CLEANUP_PROMPT}\n\n${chunks[i]}`);
+			await this.ensureCtxForText(`${cleanupSystem}\n\n${chunks[i]}`);
 			const messages: ApiChatMessageData[] = [
-				{ role: MessageRole.SYSTEM, content: CLEANUP_PROMPT },
+				{ role: MessageRole.SYSTEM, content: cleanupSystem },
 				{ role: MessageRole.USER, content: chunks[i] }
 			];
 			const { text } = await this.stream(messages, {
 				enableThinking: false,
-				sampling: template.sampling
+				sampling
 			});
 			cleanedParts.push(text.trim());
 		}
@@ -380,7 +419,8 @@ class SummarizeStore {
 		}
 
 		const chunks = splitIntoChunks(sourceText, CHUNK_TOKEN_BUDGET, charsPerToken, 200);
-		const mapPrompt = buildMapPrompt(template);
+		const mapPrompt = buildMapPrompt(template, this.context || undefined, this.creative);
+		const sampling = this.effSampling(template);
 		const summaries: string[] = [];
 
 		// MAP: sammanfatta varje bit.
@@ -394,7 +434,7 @@ class SummarizeStore {
 			];
 			const { text } = await this.stream(messages, {
 				enableThinking: false,
-				sampling: template.sampling
+				sampling
 			});
 			const trimmed = text.trim();
 			// Hoppa över avsnitt utan relevant innehåll. Modellen kan formulera sig
@@ -418,10 +458,11 @@ class SummarizeStore {
 		this.phase = 'summarizing';
 		this.result = '';
 		const joined = summaries.join('\n\n---\n\n');
-		// Lägg agendan i reduce-steget om sådan finns (map utelämnar den).
-		const reduceSystem = this.agenda
-			? `${REDUCE_PROMPT}\n\n--- AGENDA ---\n${this.agenda}\n--- SLUT AGENDA ---`
-			: REDUCE_PROMPT;
+		// Lägg kontexten (före agendan) och agendan i reduce-steget om de finns.
+		let reduceSystem = `${REDUCE_PROMPT}${this.contextBlock()}`;
+		if (this.agenda) {
+			reduceSystem = `${reduceSystem}\n\n--- AGENDA ---\n${this.agenda}\n--- SLUT AGENDA ---`;
+		}
 
 		// Skydd: om delsammanfattningarna tillsammans inte ryms i taket finns ingen
 		// reaktiv auto-expand här. Varna användaren (hierarkisk reduce är framtida arbete).
@@ -444,7 +485,7 @@ class SummarizeStore {
 		];
 		const { text: final } = await this.stream(reduceMessages, {
 			enableThinking: false,
-			sampling: template.sampling
+			sampling: this.effSampling(template)
 		});
 		await this.saveToHistory(final);
 	}

@@ -208,22 +208,20 @@ export const SUMMARY_TEMPLATES: SummaryTemplate[] = [
 ];
 
 /**
- * Prompt för språkrättningssteget (Gemma 4 E2B). Körs på ett färdigt protokoll
- * för att rätta svenskan och polera strukturen LÄTT – utan att skriva om eller
- * lägga till innehåll. Bevarar alla fakta, beslut, namn och punkter exakt.
+ * Prompt för justeringssteget ("Justera resultatet"). Körs på ett färdigt dokument
+ * tillsammans med användarens fritext-direktiv för att rätta feltolkade ord, egennamn
+ * och felaktiga sammankopplingar – UTAN att ändra något annat. Körs på samma modell
+ * som gjorde sammanfattningen. Itererbart (kan köras flera rundor).
  */
-export const LANGUAGE_REFINE_PROMPT =
-	'Du är en svensk språkgranskare. Du får ett mötesprotokoll eller en sammanfattning ' +
-	'som kan innehålla språkfel, engelska ord (svengelska) eller stela formuleringar. ' +
-	'Din uppgift:\n' +
-	'- Rätta stavning, grammatik och osvensk meningsbyggnad till korrekt, naturlig svenska.\n' +
-	'- Översätt kvarvarande engelska ord/uttryck till svenska.\n' +
-	'- Polera strukturen LÄTT för läsbarhet (rubriker, punktlistor), men ändra inte ordningen.\n' +
-	'VIKTIGT: Ändra ALDRIG innehållet. Lägg inte till, ta inte bort och tolka inte om fakta, ' +
-	'beslut, namn, siffror eller åtgärder. Byt INTE ut korrekta facktermer, egennamn eller ' +
-	'citat mot synonymer, och inför inga metaforer eller bildspråk. Rätta bara det som är ' +
-	'språkligt fel. Behåll Markdown-formatet. Svara enbart med det rättade dokumentet – inga ' +
-	'kommentarer om vad du ändrat.';
+export const ADJUST_PROMPT =
+	'Du får ett färdigt mötesdokument och en lista med justeringsdirektiv från användaren. ' +
+	'Tillämpa ENDAST de begärda justeringarna på dokumentet:\n' +
+	'- Rätta feltolkade ord, egennamn och facktermer enligt direktiven (t.ex. om användaren ' +
+	'säger att "Kulturum" ska vara "Qulturum", ersätt överallt).\n' +
+	'- Korrigera felaktiga sammankopplingar eller missförstånd som användaren pekar ut.\n' +
+	'VIKTIGT: Ändra inget annat. Lägg inte till, ta inte bort och tolka inte om fakta, beslut, ' +
+	'namn, siffror eller åtgärder utöver det direktiven säger. Behåll dokumentets struktur och ' +
+	'Markdown-format. Svara enbart med det justerade dokumentet – inga kommentarer.';
 
 /**
  * Prompt för reduce-steget i chunkad sammanfattning. Slår ihop delsammanfattningar

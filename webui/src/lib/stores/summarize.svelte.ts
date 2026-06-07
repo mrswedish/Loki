@@ -2,12 +2,7 @@ import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 import { isTauriEnv } from '$lib/server-url';
-import {
-	startServer,
-	listAvailableModels,
-	listLocalModels,
-	getSystemInfo
-} from '$lib/tauri-bridge';
+import { startServer, listAvailableModels, getSystemInfo } from '$lib/tauri-bridge';
 import { processFilesToChatUploaded } from '$lib/utils/process-uploaded-files';
 import { ChatService } from '$lib/services/chat.service';
 import { DatabaseService } from '$lib/services/database.service';
@@ -24,7 +19,7 @@ import {
 	safeCtxCeiling
 } from '$lib/services/summarize.service';
 import {
-	LANGUAGE_REFINE_PROMPT,
+	ADJUST_PROMPT,
 	REDUCE_PROMPT,
 	CLEANUP_PROMPT,
 	CONTEXT_INSTRUCTION,
@@ -58,7 +53,7 @@ import { toast } from 'svelte-sonner';
 export type SummarizeState = 'idle' | 'reading' | 'preparing' | 'running' | 'done' | 'error';
 
 /** Vilket steg i pipelinen som körs (för UI-text). */
-export type SummarizePhase = 'summarizing' | 'refining' | null;
+export type SummarizePhase = 'summarizing' | 'adjusting' | null;
 
 /** Uppskattning som visas för användaren innan körning. */
 export interface TranscriptInfo {
@@ -70,8 +65,8 @@ export interface TranscriptInfo {
 	approxMinutes: number;
 }
 
-/** Gemma-modellens id i registret – används för språkrättningssteget. */
-const REFINE_MODEL_ID = 'gemma-4-e2b';
+/** Konservativ sampling för justeringssteget – låg temp så att inget hittas på. */
+const ADJUST_SAMPLING: TemplateSampling = { temperature: 0.1 };
 
 /**
  * Tak för antal reasoning-tokens (thinking) innan vi avbryter och kör om utan
@@ -106,8 +101,6 @@ class SummarizeStore {
 	resultModel = $state<string>('');
 	/** Temperatur som faktiskt användes (för resultat-etiketten). */
 	usedTemperature = $state<number | null>(null);
-	/** True om resultatet redan språkrättats (döljer knappen). */
-	refined = $state<boolean>(false);
 	/**
 	 * Förloppsinfo under körning (för progress-indikatorn i resultatvyn).
 	 * promptPercent: prompt-processing 0–100 (innan första token).
@@ -171,7 +164,6 @@ class SummarizeStore {
 		this.info = null;
 		this.result = '';
 		this.resultModel = '';
-		this.refined = false;
 		this.usedTemperature = null;
 		this.convId = null;
 		this.resultMessageId = null;
@@ -281,7 +273,6 @@ class SummarizeStore {
 		this.phase = 'summarizing';
 		this.error = null;
 		this.result = '';
-		this.refined = false;
 		this.cachedCtxCeiling = null;
 
 		const systemPrompt = buildSystemPrompt(
@@ -520,48 +511,45 @@ class SummarizeStore {
 	}
 
 	/**
-	 * Språkrättar nuvarande resultat med Gemma 4 E2B (bäst på svenska). Byter
-	 * server till Gemma, kör en rättnings-prompt på resultattexten (kort input →
-	 * snabbt), och ersätter resultatet med den rättade versionen.
+	 * Justerar nuvarande resultat enligt användarens fritext-direktiv (t.ex. rätta
+	 * feltolkade egennamn eller felaktiga sammankopplingar). Körs på SAMMA modell som
+	 * gjorde sammanfattningen (ingen modellväxling) och skickar bara
+	 * [ADJUST_PROMPT + nuvarande resultat + direktiv] – ingen ackumulerad historik, så
+	 * kontextfönstret växer inte mellan rundor. Itererbar: kan köras flera gånger.
 	 */
-	async refineLanguage(): Promise<void> {
-		if (!this.result.trim() || this.busy) return;
+	async adjustResult(directives: string): Promise<void> {
+		if (!this.result.trim() || !directives.trim() || this.busy) return;
 		const original = this.result;
 
 		this.state = 'running';
-		this.phase = 'refining';
+		this.phase = 'adjusting';
 		this.error = null;
 
+		const userBlock = `--- DOKUMENT ---\n${original}\n\n--- JUSTERINGSDIREKTIV ---\n${directives.trim()}`;
+		const margin = this.thorough ? RESPONSE_MARGIN_THINKING : RESPONSE_MARGIN;
+
 		try {
-			// Byt till Gemma (om vi inte redan kör den) innan rättningen.
-			if (isTauriEnv()) {
-				const gemmaPath = await this.resolveModelPath(REFINE_MODEL_ID);
-				if (gemmaPath && gemmaPath !== serverStore.currentModelPath) {
-					const gpuIndex = (config().gpuIndex as number) ?? -1;
-					await startServer(gemmaPath, serverStore.contextSize ?? 4096, gpuIndex);
-					serverStore.currentModelPath = gemmaPath;
-					await serverStore.fetch();
-				}
-				// Rättningen läser bara det korta protokollet – säkra ctx för det.
-				await this.ensureContextFor(`${LANGUAGE_REFINE_PROMPT}\n\n${original}`, RESPONSE_MARGIN);
-			}
+			// Säkra ctx för bara justerings-prompten + dokumentet + direktiven (kort input).
+			await this.ensureContextFor(`${ADJUST_PROMPT}\n\n${userBlock}`, margin);
 
 			this.result = '';
-			this.resultModel = 'Gemma 4 E2B';
 			const messages: ApiChatMessageData[] = [
-				{ role: MessageRole.SYSTEM, content: LANGUAGE_REFINE_PROMPT },
-				{ role: MessageRole.USER, content: original }
+				{ role: MessageRole.SYSTEM, content: ADJUST_PROMPT },
+				{ role: MessageRole.USER, content: userBlock }
 			];
-			// Gemma är ingen thinking-modell – kör utan.
-			const { text: refined } = await this.stream(messages, { enableThinking: false });
-			this.refined = true;
-			await this.updateHistory(refined);
+			// Justering är konservativ (låg temp), oavsett "Kreativare tolkning"-växeln.
+			const { text } = await this.stream(messages, {
+				enableThinking: this.thorough,
+				sampling: ADJUST_SAMPLING
+			});
+			this.result = text;
+			await this.updateHistory(text);
 			this.state = 'done';
 		} catch (e) {
-			// Återställ originalet om rättningen misslyckas.
+			// Återställ originalet om justeringen misslyckas.
 			this.result = original;
 			this.state = 'done';
-			this.error = e instanceof Error ? e.message : 'Språkrättningen misslyckades.';
+			this.error = e instanceof Error ? e.message : 'Justeringen misslyckades.';
 			toast.error(this.error);
 		} finally {
 			this.phase = null;
@@ -762,17 +750,6 @@ class SummarizeStore {
 	}
 
 	/** Hittar den lokala sökvägen för en registermodell (via filnamn). */
-	private async resolveModelPath(modelId: string): Promise<string | null> {
-		try {
-			const [registry, local] = await Promise.all([listAvailableModels(), listLocalModels()]);
-			const entry = registry.find((m) => m.id === modelId);
-			if (!entry) return null;
-			return local.find((l) => l.filename === entry.filename)?.path ?? null;
-		} catch {
-			return null;
-		}
-	}
-
 	/** Namn på modellen som servern just nu kör (för resultatetikett). */
 	private currentModelName(): string {
 		const path = serverStore.currentModelPath ?? '';

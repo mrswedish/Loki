@@ -25,7 +25,6 @@
 		Loader2,
 		Copy,
 		Download,
-		Languages,
 		Plus,
 		FileType,
 		Wand2,
@@ -35,6 +34,14 @@
 	let isDragOver = $state(false);
 	let dragCounter = 0;
 	let selectedTemplate = $state(DEFAULT_TEMPLATE_ID);
+	// Fritext-direktiv för "Justera resultatet". Töms efter varje körd justering.
+	let directives = $state('');
+
+	async function runAdjust() {
+		if (!directives.trim()) return;
+		await summarizeStore.adjustResult(directives);
+		directives = '';
+	}
 	let editorOpen = $state(false);
 	let editorEditId = $state<string | null>(null);
 
@@ -213,14 +220,14 @@
 						<Loader2 class="mr-1 inline size-3 animate-spin" />Sammanfattar med {summarizeStore.resultModel}{progressText
 							? ` · ${progressText}`
 							: '…'}
-					{:else if summarizeStore.phase === 'refining'}
-						<Loader2 class="mr-1 inline size-3 animate-spin" />Förbättrar svenskan med Gemma{progressText
+					{:else if summarizeStore.phase === 'adjusting'}
+						<Loader2 class="mr-1 inline size-3 animate-spin" />Justerar med {summarizeStore.resultModel}{progressText
 							? ` · ${progressText}`
 							: '…'}
 					{:else}
 						Skapad med {summarizeStore.resultModel}{summarizeStore.usedTemperature !== null
 							? ` · temp ${summarizeStore.usedTemperature}`
-							: ''}{summarizeStore.refined ? ' · språkrättad' : ''}
+							: ''}
 					{/if}
 				</p>
 			</div>
@@ -274,13 +281,32 @@
 		{/if}
 
 		{#if summarizeStore.state === 'done'}
+			<!-- Justera resultatet: ge egna direktiv (t.ex. feltolkade egennamn). Itererbart. -->
+			<div class="space-y-2 rounded-lg border border-border bg-muted/20 p-3">
+				<Label for="adjust" class="flex items-center gap-1.5 text-sm font-medium">
+					<Wand2 class="size-3.5" />
+					Justera resultatet
+				</Label>
+				<Textarea
+					id="adjust"
+					bind:value={directives}
+					disabled={busy}
+					rows={2}
+					placeholder="Dina rättningar, t.ex.: 'Kulturum' ska vara 'Qulturum'. 'Anka-plats' = 'Ankarplats'. Koppla inte ihop budgetfrågan med personalärendet."
+					class="resize-none bg-background"
+				/>
+				<Button
+					onclick={runAdjust}
+					disabled={busy || !directives.trim()}
+					size="sm"
+					class="gap-2"
+				>
+					<Wand2 class="size-4" />
+					Justera
+				</Button>
+			</div>
+
 			<div class="flex flex-wrap items-center gap-2">
-				{#if !summarizeStore.refined}
-					<Button onclick={() => summarizeStore.refineLanguage()} disabled={busy} class="gap-2">
-						<Languages class="size-4" />
-						Förbättra svenskan (Gemma)
-					</Button>
-				{/if}
 				<Button variant="outline" onclick={copyResult} disabled={busy} class="gap-2">
 					<Copy class="size-4" />
 					Kopiera

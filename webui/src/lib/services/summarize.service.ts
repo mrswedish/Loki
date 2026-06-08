@@ -34,17 +34,22 @@ export const RESPONSE_MARGIN = 4096;
 export const RESPONSE_MARGIN_THINKING = 10_240;
 
 /**
- * Beräknar ett SÄKERT tak för kontextfönstret baserat på tillgängligt RAM och
- * modellens storlek. KV-cachen (plus GPU-overhead vid uppstart) kan spränga minnet
- * långt innan modellens teoretiska maxkontext. Vi laddar därför inte ett större
- * fönster än vad systemet säkert klarar – långa texter chunkas i stället.
- *
- * Heuristiken är FÖRSIKTIG men måste rymma vanliga möten i ETT pass: en typisk
- * transkribering på 8–13k tokens ska INTE tvingas till chunkning eller (värre) skickas
- * till ett för litet fönster → context-overflow. Floor 16k garanterar att sådana
- * prompter ryms. För riktigt långa texter returnerar pickStrategy ändå 'chunked' när
- * prompten överstiger taket. (VRAM vid uppstart hanteras separat av llama.cpp:s
- * --n-gpu-layers auto, inte här.) Faller tillbaka till MAX_CTX om RAM-info saknas.
+ * KV-cachens minnesåtgång per kontext-token, i GB. Uppmätt från llama-server-loggar:
+ * Gemma 4 E4B skapar context checkpoints på ~20 MiB / 1024 tokens ≈ 0,02 MiB/token.
+ * Vi använder 0,03 MiB/token (0,00003 GB) som KONSERVATIV övre gräns så att större
+ * modeller (t.ex. 12B med fler lager → något dyrare KV) också får marginal.
+ */
+const KV_GB_PER_TOKEN = 0.00003;
+
+/**
+ * Beräknar ett SÄKERT tak för kontextfönstret. KV-cachen är i praktiken BILLIG (se
+ * KV_GB_PER_TOKEN) – det som tar minne är modellvikterna. Vi maxar därför kontexten:
+ * allt RAM som blir kvar efter modellvikterna + OS/app-overhead får gå till KV-cache,
+ * upp till MAX_CTX (pickStrategy cappar dessutom mot modellens n_ctx_train). Detta gör
+ * att vanliga och även långa möten (t.ex. 120 min ≈ 23k tokens) ryms i ETT pass i
+ * stället för att chunkas – färre delar ger mer konsekvent resultat (samma fonetiska
+ * term tolkas inte olika i olika delar). Endast extremt långa texter eller riktigt
+ * knappt RAM tvingar fram chunkning. Faller tillbaka till MAX_CTX om RAM-info saknas.
  *
  * @param totalRamGb     Totalt systemminne i GB (CPU-körning kan nyttja allt).
  * @param modelSizeBytes Modellfilens storlek i bytes (ungefär modellvikternas RAM).
@@ -57,13 +62,9 @@ export function safeCtxCeiling(
 	const modelGb = modelSizeBytes ? modelSizeBytes / 1_000_000_000 : 4;
 	// Reservera ~2 GB för OS/app; resten efter modellvikterna får gå till KV-cache.
 	const kvBudgetGb = Math.max(0, totalRamGb - modelGb - 2);
-	// KV-cachen per token skalar med modellens storlek (fler lager = större cache).
-	// 14000 ger E4B/12B ~16k på en 14–16 GB-maskin (rymmer vanliga möten single), och
-	// mer på maskiner med mer minne. Mindre modeller får fler tokens/GB → större fönster.
-	const tokensPerGb = 14_000 / modelGb;
-	const ceiling = roundCtx(kvBudgetGb * tokensPerGb);
-	// Klampa till [16k, MAX_CTX] – minst 16k så att vanliga möten alltid ryms i ett pass.
-	return Math.min(Math.max(ceiling, 16_384), MAX_CTX);
+	const ceiling = roundCtx(kvBudgetGb / KV_GB_PER_TOKEN);
+	// Klampa till [8k, MAX_CTX] – minst 8k (minsta vettiga vid knappt RAM), aldrig över taket.
+	return Math.min(Math.max(ceiling, 8192), MAX_CTX);
 }
 
 /** llama.cpp /tokenize-svar. */

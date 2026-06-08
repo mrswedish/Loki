@@ -75,8 +75,13 @@ const ADJUST_SAMPLING: TemplateSampling = { temperature: 0.1 };
  */
 const MAX_THINKING_TOKENS = 2500;
 
-/** Token-budget per bit vid chunkad sammanfattning (Geminis "~20 min"-råd). */
-const CHUNK_TOKEN_BUDGET = 8000;
+/**
+ * Fallback-token-budget per bit vid chunkad sammanfattning, om ctx-taket inte kan
+ * hämtas (icke-Tauri). Annars beräknas budgeten dynamiskt nära ctx-taket
+ * (se chunkTokenBudget) så att en text som ändå måste delas delas i SÅ FÅ delar som
+ * möjligt – färre övergångar ger mer konsekvent resultat.
+ */
+const CHUNK_TOKEN_BUDGET_FALLBACK = 24_000;
 
 class SummarizeStore {
 	state = $state<SummarizeState>('idle');
@@ -148,6 +153,17 @@ class SummarizeStore {
 		} catch {
 			return undefined;
 		}
+	}
+
+	/**
+	 * Token-budget per bit vid chunkning: ~80 % av ctx-taket minus svarsmarginal, så
+	 * varje del fyller fönstret och en text som måste delas delas i så få delar som
+	 * möjligt. Faller tillbaka till en fast budget om taket inte kan hämtas.
+	 */
+	private async chunkTokenBudget(): Promise<number> {
+		const ceiling = await this.ctxCeiling();
+		if (!ceiling) return CHUNK_TOKEN_BUDGET_FALLBACK;
+		return Math.max(8000, Math.floor(ceiling * 0.8) - RESPONSE_MARGIN);
 	}
 
 	get busy(): boolean {
@@ -373,7 +389,8 @@ class SummarizeStore {
 		} catch {
 			// behåll fallback
 		}
-		const chunks = splitIntoChunks(this.transcript, CHUNK_TOKEN_BUDGET, charsPerToken, 200);
+		const budget = await this.chunkTokenBudget();
+		const chunks = splitIntoChunks(this.transcript, budget, charsPerToken, 200);
 		// Kontexten hjälper mest vid tvätt (facktermsrättning) – lägg den i system-prompten.
 		const cleanupSystem = `${CLEANUP_PROMPT}${this.contextBlock()}`;
 		const sampling = this.effSampling(template);
@@ -411,7 +428,8 @@ class SummarizeStore {
 			// behåll fallback
 		}
 
-		const chunks = splitIntoChunks(sourceText, CHUNK_TOKEN_BUDGET, charsPerToken, 200);
+		const budget = await this.chunkTokenBudget();
+		const chunks = splitIntoChunks(sourceText, budget, charsPerToken, 200);
 		const mapPrompt = buildMapPrompt(template, this.context || undefined, this.creative);
 		const sampling = this.effSampling(template);
 		const summaries: string[] = [];

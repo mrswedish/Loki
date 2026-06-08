@@ -165,36 +165,44 @@ describe('safeCtxCeiling', () => {
 		expect(safeCtxCeiling(0, 6.7 * GB)).toBe(MAX_CTX);
 	});
 
-	it('ger 12B på 16 GB minst 16k (rymmer vanliga möten i ett pass)', () => {
-		const ceiling = safeCtxCeiling(16, 6.7 * GB);
-		expect(ceiling).toBeGreaterThanOrEqual(16_384);
+	it('maxar mot MAX_CTX när RAM räcker (KV-cachen är billig)', () => {
+		// E4B på 14,6 GB har gott om RAM-budget → taket når MAX_CTX (120-min ryms single).
+		expect(safeCtxCeiling(14.6, 6.9 * GB)).toBe(MAX_CTX);
+		expect(safeCtxCeiling(16, 6.7 * GB)).toBe(MAX_CTX);
 	});
 
-	it('ger mer utrymme på en maskin med mer RAM', () => {
+	it('ger mer utrymme på en maskin med mer RAM (vid knappt minne)', () => {
+		const ram8 = safeCtxCeiling(8, 6.7 * GB);
 		const ram16 = safeCtxCeiling(16, 6.7 * GB);
-		const ram64 = safeCtxCeiling(64, 6.7 * GB);
-		expect(ram64).toBeGreaterThan(ram16);
+		expect(ram16).toBeGreaterThan(ram8);
 	});
 
-	it('ger en liten modell mer utrymme på samma RAM', () => {
-		const small = safeCtxCeiling(16, 3.5 * GB); // E2B
-		const big = safeCtxCeiling(16, 6.7 * GB); // 12B
+	it('ger en liten modell mer utrymme på samma knappa RAM', () => {
+		// På 10 GB ryms E2B med mer ctx än 12B (mindre modellvikter → större KV-budget).
+		const small = safeCtxCeiling(10, 3.5 * GB); // E2B
+		const big = safeCtxCeiling(10, 6.7 * GB); // 12B
 		expect(small).toBeGreaterThan(big);
 	});
 
-	it('klampar till minst 16k (floor) när minnet är knappt', () => {
-		// 12B på en maskin med bara 8 GB → liten KV-budget, men floor garanterar 16k
-		// (VRAM vid uppstart hanteras av llama.cpp --n-gpu-layers auto, inte här).
-		expect(safeCtxCeiling(8, 6.7 * GB)).toBe(16_384);
+	it('klampar till minst 8k (golv) när minnet är knappt', () => {
+		// 12B på en maskin med bara 8 GB → mycket liten KV-budget, men golvet garanterar 8k.
+		expect(safeCtxCeiling(8, 6.7 * GB)).toBe(8192);
 	});
 
 	it('överstiger aldrig MAX_CTX', () => {
 		expect(safeCtxCeiling(256, 3.5 * GB)).toBeLessThanOrEqual(MAX_CTX);
 	});
 
-	// Invariant (Bug A): en vanlig mötesprompt ryms single i E4B-taket, ingen overflow.
+	// Invariant (Steg 10): en 120-min-transkribering (~23k tokens) körs SINGLE, inte chunkad.
+	it('120-min-transkribering (23k) körs single på E4B/14.6GB (ingen chunkning)', () => {
+		const ceiling = safeCtxCeiling(14.6, 6.9 * GB);
+		const d = pickStrategy(23000, ceiling, RESPONSE_MARGIN);
+		expect(d.strategy).toBe('single');
+	});
+
+	// Invariant (Steg 9): en vanlig mötesprompt ryms single i E4B-taket, ingen overflow.
 	it('en 8885-tokens-prompt ryms single i E4B-taket (ingen overflow)', () => {
-		const ceiling = safeCtxCeiling(14.6, 6.9 * GB); // E4B på iGPU-maskinen
+		const ceiling = safeCtxCeiling(14.6, 6.9 * GB);
 		const d = pickStrategy(8885, ceiling, RESPONSE_MARGIN);
 		expect(d.strategy).toBe('single');
 		expect(d.ctx).toBeGreaterThanOrEqual(8885 + RESPONSE_MARGIN);

@@ -92,22 +92,25 @@ impl InferenceEngine {
 		#[cfg(feature = "cpu-only")]
 		let port = {
 			self.fell_back_to_cpu = false;
-			self.try_spawn(&binary, path, ctx, gpu_index, log_dir.clone(), 0, true, Duration::from_secs(300))?
+			self.try_spawn(&binary, path, ctx, gpu_index, log_dir.clone(), "0", true, Duration::from_secs(300))?
 		};
 
 		// GPU build: try Vulkan first, fall back to a *real* CPU run on failure
 		// (OOM, missing Vulkan extension, crashing driver). Den första körningen kör
-		// GPU; faller den kör vi om med force_cpu=true som tvingar bort Vulkan helt
+		// GPU med --n-gpu-layers auto: llama.cpp mäter tillgängligt VRAM och lägger bara
+		// så många lager som ryms (partiell offload), resten på CPU. Det undviker att en
+		// stor modell (t.ex. 12B) spränger en svag iGPU genom att tvinga ALLA lager dit.
+		// Faller GPU-starten ändå kör vi om med force_cpu=true som tvingar bort Vulkan helt
 		// (--device none, -fit off, tömd Vulkan-env) så device-init aldrig sker.
 		#[cfg(not(feature = "cpu-only"))]
-		let port = match self.try_spawn(&binary, path, ctx, gpu_index, log_dir.clone(), 99, false, Duration::from_secs(60)) {
+		let port = match self.try_spawn(&binary, path, ctx, gpu_index, log_dir.clone(), "auto", false, Duration::from_secs(60)) {
 			Ok(p) => {
 				self.fell_back_to_cpu = false;
 				p
 			}
 			Err(e) => {
 				eprintln!("[InferenceEngine] GPU misslyckades ({}), startar om på CPU (--device none)...", e);
-				let p = self.try_spawn(&binary, path, ctx, gpu_index, log_dir.clone(), 0, true, Duration::from_secs(300))?;
+				let p = self.try_spawn(&binary, path, ctx, gpu_index, log_dir.clone(), "0", true, Duration::from_secs(300))?;
 				self.fell_back_to_cpu = true;
 				p
 			}
@@ -131,7 +134,7 @@ impl InferenceEngine {
 		ctx: u32,
 		gpu_index: Option<i32>,
 		log_dir: Option<PathBuf>,
-		gpu_layers: u32,
+		gpu_layers: &str,
 		force_cpu: bool,
 		timeout: Duration,
 	) -> Result<u16, String> {
@@ -146,7 +149,7 @@ impl InferenceEngine {
 		// och reserverar KV-cache för slots vi aldrig använder – hela ctx ska gå till den
 		// enda förfrågan.
 		cmd.arg("--parallel").arg("1");
-		cmd.arg("--n-gpu-layers").arg(gpu_layers.to_string());
+		cmd.arg("--n-gpu-layers").arg(gpu_layers);
 		cmd.arg("--jinja");
 		// Flash Attention i auto-läge: llama.cpp aktiverar FA där hårdvaran stödjer det
 		// (CPU, NVIDIA/coopmat2) och faller annars säkert tillbaka. Aldrig tvinga 'on' –

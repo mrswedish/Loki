@@ -18,7 +18,7 @@ const ASSET_EXTENSION: &str = ".tar.gz";
 /// en verifierad tag får nya installationer ett känt-gott bygge. Användaren kan
 /// fortfarande uppdatera medvetet (clear_server_binary), och om den pinnade taggen
 /// av någon anledning saknas faller vi tillbaka till latest.
-const PINNED_TAG: &str = "b9467";
+const PINNED_TAG: &str = "b9553";
 
 /// CUDA-versionen vi riktar oss mot. 12.4 har bredast drivrutinskompatibilitet
 /// (NVIDIA R550+) och är säkrast på IT-kontrollerade maskiner med ev. äldre

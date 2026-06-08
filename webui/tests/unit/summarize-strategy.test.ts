@@ -165,11 +165,9 @@ describe('safeCtxCeiling', () => {
 		expect(safeCtxCeiling(0, 6.7 * GB)).toBe(MAX_CTX);
 	});
 
-	it('begränsar 12B på 16 GB till ett säkert litet fönster (~8k, inte 128k)', () => {
-		// Kalibrerat mot empiri: 12B/16GB startar säkert vid ~8k, kraschar vid 16k.
+	it('ger 12B på 16 GB minst 16k (rymmer vanliga möten i ett pass)', () => {
 		const ceiling = safeCtxCeiling(16, 6.7 * GB);
-		expect(ceiling).toBeLessThanOrEqual(8192);
-		expect(ceiling).toBeGreaterThanOrEqual(8192); // exakt 8k (8k-floor)
+		expect(ceiling).toBeGreaterThanOrEqual(16_384);
 	});
 
 	it('ger mer utrymme på en maskin med mer RAM', () => {
@@ -184,27 +182,22 @@ describe('safeCtxCeiling', () => {
 		expect(small).toBeGreaterThan(big);
 	});
 
-	it('klampar till minst 8k när minnet är knappt', () => {
-		// 12B på en maskin med bara 8 GB → väldigt lite KV-budget.
-		expect(safeCtxCeiling(8, 6.7 * GB)).toBe(8192);
+	it('klampar till minst 16k (floor) när minnet är knappt', () => {
+		// 12B på en maskin med bara 8 GB → liten KV-budget, men floor garanterar 16k
+		// (VRAM vid uppstart hanteras av llama.cpp --n-gpu-layers auto, inte här).
+		expect(safeCtxCeiling(8, 6.7 * GB)).toBe(16_384);
 	});
 
 	it('överstiger aldrig MAX_CTX', () => {
 		expect(safeCtxCeiling(256, 3.5 * GB)).toBeLessThanOrEqual(MAX_CTX);
 	});
 
-	// Dokumenterar clamp-intentionen i startServer (Math.min(begärd, safeCtxCeiling)).
-	it('clampar en för stor begärd ctx till det säkra taket (12B/16GB)', () => {
-		const requested = 16_384;
-		const safe = Math.min(requested, safeCtxCeiling(16, 6.7 * GB));
-		expect(safe).toBeLessThan(requested); // sänktes
-		expect(safe).toBeGreaterThanOrEqual(8192);
-	});
-
-	it('rör inte en begärd ctx som ryms (liten modell, gott om RAM)', () => {
-		const requested = 8192;
-		const safe = Math.min(requested, safeCtxCeiling(32, 3.5 * GB));
-		expect(safe).toBe(requested); // oförändrad
+	// Invariant (Bug A): en vanlig mötesprompt ryms single i E4B-taket, ingen overflow.
+	it('en 8885-tokens-prompt ryms single i E4B-taket (ingen overflow)', () => {
+		const ceiling = safeCtxCeiling(14.6, 6.9 * GB); // E4B på iGPU-maskinen
+		const d = pickStrategy(8885, ceiling, RESPONSE_MARGIN);
+		expect(d.strategy).toBe('single');
+		expect(d.ctx).toBeGreaterThanOrEqual(8885 + RESPONSE_MARGIN);
 	});
 });
 

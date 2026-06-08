@@ -165,10 +165,17 @@ describe('safeCtxCeiling', () => {
 		expect(safeCtxCeiling(0, 6.7 * GB)).toBe(MAX_CTX);
 	});
 
-	it('begränsar 12B på 16 GB till ~32k (säkert, inte 128k)', () => {
+	it('begränsar 12B på 16 GB till ett säkert litet fönster (~8k, inte 128k)', () => {
+		// Kalibrerat mot empiri: 12B/16GB startar säkert vid ~8k, kraschar vid 16k.
 		const ceiling = safeCtxCeiling(16, 6.7 * GB);
-		expect(ceiling).toBeGreaterThanOrEqual(24_000);
-		expect(ceiling).toBeLessThanOrEqual(40_000);
+		expect(ceiling).toBeLessThanOrEqual(8192);
+		expect(ceiling).toBeGreaterThanOrEqual(8192); // exakt 8k (8k-floor)
+	});
+
+	it('ger mer utrymme på en maskin med mer RAM', () => {
+		const ram16 = safeCtxCeiling(16, 6.7 * GB);
+		const ram64 = safeCtxCeiling(64, 6.7 * GB);
+		expect(ram64).toBeGreaterThan(ram16);
 	});
 
 	it('ger en liten modell mer utrymme på samma RAM', () => {
@@ -184,6 +191,20 @@ describe('safeCtxCeiling', () => {
 
 	it('överstiger aldrig MAX_CTX', () => {
 		expect(safeCtxCeiling(256, 3.5 * GB)).toBeLessThanOrEqual(MAX_CTX);
+	});
+
+	// Dokumenterar clamp-intentionen i startServer (Math.min(begärd, safeCtxCeiling)).
+	it('clampar en för stor begärd ctx till det säkra taket (12B/16GB)', () => {
+		const requested = 16_384;
+		const safe = Math.min(requested, safeCtxCeiling(16, 6.7 * GB));
+		expect(safe).toBeLessThan(requested); // sänktes
+		expect(safe).toBeGreaterThanOrEqual(8192);
+	});
+
+	it('rör inte en begärd ctx som ryms (liten modell, gott om RAM)', () => {
+		const requested = 8192;
+		const safe = Math.min(requested, safeCtxCeiling(32, 3.5 * GB));
+		expect(safe).toBe(requested); // oförändrad
 	});
 });
 

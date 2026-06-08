@@ -35,15 +35,16 @@ export const RESPONSE_MARGIN_THINKING = 10_240;
 
 /**
  * Beräknar ett SÄKERT tak för kontextfönstret baserat på tillgängligt RAM och
- * modellens storlek. KV-cachen växer linjärt med kontextstorleken och kan spränga
- * minnet långt innan modellens teoretiska maxkontext (t.ex. Gemma 12B på 16 GB
- * klarar ~32k, men 128k+ kräver 24 GB+). Vi laddar därför inte ett större fönster
- * än vad minnet säkert rymmer – långa texter chunkas i stället.
+ * modellens storlek. KV-cachen (plus GPU-overhead vid uppstart) kan spränga minnet
+ * långt innan modellens teoretiska maxkontext. Vi laddar därför inte ett större
+ * fönster än vad systemet säkert klarar – långa texter chunkas i stället.
  *
- * Heuristiken är medvetet FÖRSIKTIG (hellre chunka för tidigt än krascha):
- * minnet som blir kvar efter modellvikterna får användas till KV-cache, och vi
- * räknar konservativt ~1,5 GB KV per 32k tokens. Faller tillbaka till MAX_CTX om
- * RAM-info saknas (icke-Tauri / okänt).
+ * Heuristiken är medvetet FÖRSIKTIG (hellre chunka/starta litet än krascha) och
+ * KALIBRERAD MOT VERKLIG EMPIRI: en ~6,7 GB Gemma 12B på 16 GB RAM startar
+ * tillförlitligt vid ~8k men FALLERAR vid 16k (verifierat på Windows; flaskhalsen
+ * vid uppstart är ofta VRAM, inte total-RAM, och den ser vi inte här). Konstanten
+ * 7000 ger därför ~8k för 12B/16GB och mer på maskiner med mer minne. Faller tillbaka
+ * till MAX_CTX om RAM-info saknas (icke-Tauri / okänt).
  *
  * @param totalRamGb     Totalt systemminne i GB (CPU-körning kan nyttja allt).
  * @param modelSizeBytes Modellfilens storlek i bytes (ungefär modellvikternas RAM).
@@ -57,9 +58,9 @@ export function safeCtxCeiling(
 	// Reservera ~2 GB för OS/app; resten efter modellvikterna får gå till KV-cache.
 	const kvBudgetGb = Math.max(0, totalRamGb - modelGb - 2);
 	// KV-cachen per token skalar med modellens storlek (fler lager = större cache).
-	// Kalibrerat mot verkligheten: en ~6,7 GB 12B-modell använder ~7 GB KV vid 32k →
-	// ca 4500 tokens/GB. Mindre modeller får fler tokens/GB. Konservativ skalning:
-	const tokensPerGb = 30_000 / modelGb;
+	// 7000 är kalibrerat mot empiri: 12B (6,7 GB) på 16 GB → 8k (säkert), inte 32k
+	// (kraschade). Mindre modeller får fler tokens/GB → större fönster.
+	const tokensPerGb = 7_000 / modelGb;
 	const ceiling = roundCtx(kvBudgetGb * tokensPerGb);
 	// Klampa till [8k, MAX_CTX] – aldrig under 8k (minsta vettiga), aldrig över taket.
 	return Math.min(Math.max(ceiling, 8192), MAX_CTX);

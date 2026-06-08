@@ -5,6 +5,7 @@
  * I vanlig webbläsare är alla funktioner no-ops / returnerar null.
  */
 import { setServerBase, isTauriEnv } from '$lib/server-url';
+import { safeCtxCeiling } from '$lib/services/summarize.service';
 
 // Lazy-import av Tauri API så att builden inte kraschar i icke-Tauri miljöer
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -71,9 +72,28 @@ export async function startServer(
 	contextSize?: number,
 	gpuIndex?: number
 ): Promise<string> {
+	// RAM-medveten clampning: ett för stort kontextfönster spränger minnet (KV-cachen
+	// växer linjärt med ctx). Sänk det begärda värdet till det största som säkert ryms
+	// för modellen + systemets RAM. Clampar bara NEDÅT och bara när det behövs – sker
+	// centralt här så ALLA modellstarter (modellväljare, chatt-omstart, sammanfattning,
+	// auto-expand) skyddas konsekvent.
+	let safeCtx = contextSize;
+	if (contextSize && isTauriEnv()) {
+		try {
+			const [sys, models] = await Promise.all([getSystemInfo(), listAvailableModels()]);
+			const file = modelPath.replace(/\\/g, '/').split('/').pop() ?? '';
+			const entry = models.find((m) => m.filename === file);
+			const ceiling = safeCtxCeiling(sys.total_ram_gb, entry?.size_bytes);
+			safeCtx = Math.min(contextSize, ceiling);
+		} catch {
+			// RAM-/modellinfo saknas → använd det begärda värdet (safeCtxCeiling faller
+			// annars tillbaka till MAX_CTX, så detta påverkar bara fel-fall).
+		}
+	}
+
 	const result = await invoke<{ url: string; fellBackToCpu: boolean }>('start_server', {
 		modelPath,
-		contextSize,
+		contextSize: safeCtx,
 		gpuIndex
 	});
 	setServerBase(result.url);

@@ -1,282 +1,907 @@
+mod documents;
+mod summarizer;
+mod transcript;
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::PathBuf;
+use summarizer::{
+    get_model_spec, ModelSpec, SummarizeRequest, SummarizeResult, SummarizerEngine, ALL_MODELS,
+    MODEL_E2B, MODEL_E4B,
+};
+use tauri::{AppHandle, Emitter, Manager};
 
-mod llama_server;
-mod model_download;
-mod inference;
+static ENGINE: Mutex<Option<SummarizerEngine>> = Mutex::new(None);
+static SUMMARIZE_CANCEL: AtomicBool = AtomicBool::new(false);
+static DOWNLOAD_CANCEL: AtomicBool = AtomicBool::new(false);
+static STATE_LOCK: Mutex<()> = Mutex::new(());
 
-use tauri::Manager;
-use tauri_plugin_dialog::DialogExt;
-
-pub fn get_app_dir(app: &tauri::AppHandle) -> PathBuf {
-	app.path().app_data_dir().expect("Could not find app_data directory")
-}
-
-pub fn ensure_dirs(app: &tauri::AppHandle) {
-	let app_dir = get_app_dir(app);
-	let mut dirs = vec![app_dir.clone(), app_dir.join("models"), app_dir.join("bin")];
-	if let Ok(log_dir) = app.path().app_log_dir() {
-		dirs.push(log_dir);
-	}
-	for dir in dirs {
-		if !dir.exists() {
-			fs::create_dir_all(dir).ok();
-		}
-	}
-}
-
-// ─── File Export ─────────────────────────────────────────
-
-/// Opens a native "Save As" dialog and writes the given text content to the chosen path.
-/// Returns the saved file path on success.
-#[tauri::command]
-async fn save_text_file(content: String, app: tauri::AppHandle) -> Result<String, String> {
-	let path = app
-		.dialog()
-		.file()
-		.set_file_name("anonymiserat-dokument.txt")
-		.add_filter("Textfil", &["txt"])
-		.blocking_save_file()
-		.ok_or_else(|| "Ingen fil vald".to_string())?;
-	let path_str = path.to_string();
-	std::fs::write(&path_str, content.as_bytes())
-		.map_err(|e| format!("Skrivfel: {}", e))?;
-	Ok(path_str)
-}
-
-// ─── System Info ─────────────────────────────────────────
-
-#[derive(Serialize)]
-pub struct SystemInfo {
-	pub total_ram_gb: f32,
-	pub available_ram_gb: f32,
-}
-
-#[tauri::command]
-fn get_system_info() -> SystemInfo {
-	use sysinfo::System;
-	let mut sys = System::new();
-	sys.refresh_memory();
-	SystemInfo {
-		total_ram_gb: sys.total_memory() as f32 / (1024.0 * 1024.0 * 1024.0),
-		available_ram_gb: sys.available_memory() as f32 / (1024.0 * 1024.0 * 1024.0),
-	}
-}
-
-// ─── Data Types ──────────────────────────────────────────
+// ── Modellstatus & Nedladdningsstrukturer ────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelInfo {
-	pub name: String,
-	pub filename: String,
-	pub path: String,
-	pub size_bytes: u64,
+#[serde(rename_all = "camelCase")]
+pub struct ModelEntryStatus {
+    pub id: String,
+    pub label: String,
+    pub short_label: String,
+    pub description: String,
+    pub filename: String,
+    pub expected_bytes: u64,
+    pub file_size_bytes: u64,
+    pub installed: bool,
+    pub loaded: bool,
+    /// Var modellen hittades: `"loki"` | `"maskera"` | `"portable"` | `""`
+    pub source: String,
+    pub can_delete: bool,
 }
 
-// ─── Model Management ────────────────────────────────────
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelsOverview {
+    pub active_model_id: String,
+    pub loaded_model_id: Option<String>,
+    pub any_installed: bool,
+    pub total_ram_gb: f64,
+    pub safe_ctx_tokens: u32,
+    pub models: Vec<ModelEntryStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelDownloadProgress {
+    pub model_id: String,
+    pub phase: String, // "downloading" | "copying" | "loading" | "ready"
+    pub label: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+}
+
+// ── Lokal JSON-persistens (100 % på användarens egen dator) ──────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomTemplateSampling {
+    pub temperature: Option<f32>,
+    pub repeat_penalty: Option<f32>,
+    pub presence_penalty: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredCustomTemplate {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub system_prompt: String,
+    pub sampling: Option<CustomTemplateSampling>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedContextPreset {
+    pub id: String,
+    pub label: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryEntry {
+    pub id: String,
+    pub created_at: String,
+    pub meeting_name: String,
+    pub template_id: String,
+    pub template_label: String,
+    pub model_label: String,
+    pub markdown: String,
+    pub context: Option<String>,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalAppState {
+    #[serde(default = "default_model_id")]
+    pub active_model_id: String,
+    #[serde(default)]
+    pub custom_templates: Vec<StoredCustomTemplate>,
+    #[serde(default)]
+    pub saved_contexts: Vec<SavedContextPreset>,
+    #[serde(default)]
+    pub history: Vec<HistoryEntry>,
+}
+
+fn default_model_id() -> String {
+    "e2b".to_string()
+}
+
+impl Default for LocalAppState {
+    fn default() -> Self {
+        Self {
+            active_model_id: default_model_id(),
+            custom_templates: Vec::new(),
+            saved_contexts: Vec::new(),
+            history: Vec::new(),
+        }
+    }
+}
+
+// ── Katalog- & Modellsökvägar (inkl. delning med Maskera!) ───────────────────
+
+fn app_data_root(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Kan inte hitta app-datakatalog: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Kan inte skapa app-datakatalog: {e}"))?;
+    Ok(dir)
+}
+
+fn loki_models_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app_data_root(app)?.join("models");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Kan inte skapa modellkatalog: {e}"))?;
+    Ok(dir)
+}
+
+fn state_file_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app_data_root(app)?.join("loki_state.json"))
+}
+
+fn read_state_unlocked(app: &AppHandle) -> LocalAppState {
+    let Ok(path) = state_file_path(app) else {
+        return LocalAppState::default();
+    };
+    if !path.exists() {
+        return LocalAppState::default();
+    }
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<LocalAppState>(&s).ok())
+        .unwrap_or_default()
+}
+
+fn write_state_unlocked(app: &AppHandle, state: &LocalAppState) -> Result<(), String> {
+    let path = state_file_path(app)?;
+    let tmp = path.with_extension("json.tmp");
+    let json = serde_json::to_string_pretty(state)
+        .map_err(|e| format!("Kunde inte serialisera lokalt tillstånd: {e}"))?;
+    std::fs::write(&tmp, json.as_bytes())
+        .map_err(|e| format!("Kunde inte skriva lokal inställningsfil: {e}"))?;
+    if std::fs::rename(&tmp, &path).is_err() {
+        std::fs::copy(&tmp, &path)
+            .map_err(|e| format!("Kunde inte uppdatera lokal inställningsfil: {e}"))?;
+        let _ = std::fs::remove_file(&tmp);
+    }
+    Ok(())
+}
+
+fn is_valid_gguf_for_spec(path: &Path, spec: &ModelSpec) -> Option<u64> {
+    let meta = std::fs::metadata(path).ok()?;
+    if meta.is_file() && meta.len() >= spec.min_valid_bytes {
+        Some(meta.len())
+    } else {
+        None
+    }
+}
+
+struct ResolvedModelPath {
+    path: PathBuf,
+    bytes: u64,
+    source: &'static str, // "loki" | "portable" | "maskera"
+}
+
+/// Letar efter modellfilen i:
+/// 1. Lokis egen `app_data_dir/models`
+/// 2. Portabel mapp bredvid körbar fil (`{exe_dir}/models`) eller `resource_dir/models`
+/// 3. Systerappen Maskeras modellmapp (`com.patriksvensk.maskera/models/judge` eller `models`)
+///    -> ger 0 GB dubbelnedladdning om Gemma 4 E2B redan installerats i Maskera!
+fn resolve_model_file(app: &AppHandle, spec: &ModelSpec) -> Option<ResolvedModelPath> {
+    if let Ok(ldir) = loki_models_dir(app) {
+        let p = ldir.join(spec.filename);
+        if let Some(bytes) = is_valid_gguf_for_spec(&p, spec) {
+            return Some(ResolvedModelPath {
+                path: p,
+                bytes,
+                source: "loki",
+            });
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            for cand in [
+                parent.join("models").join(spec.filename),
+                parent.join("models").join("judge").join(spec.filename),
+            ] {
+                if let Some(bytes) = is_valid_gguf_for_spec(&cand, spec) {
+                    return Some(ResolvedModelPath {
+                        path: cand,
+                        bytes,
+                        source: "portable",
+                    });
+                }
+            }
+        }
+    }
+
+    if let Ok(res_dir) = app.path().resource_dir() {
+        let cand = res_dir.join("models").join(spec.filename);
+        if let Some(bytes) = is_valid_gguf_for_spec(&cand, spec) {
+            return Some(ResolvedModelPath {
+                path: cand,
+                bytes,
+                source: "portable",
+            });
+        }
+    }
+
+    // Kontrollera om systerappen Maskera redan har laddat ner samma QAT GGUF-modell
+    if let Ok(data_dir) = app.path().app_data_dir() {
+        if let Some(apps_parent) = data_dir.parent() {
+            let maskera_root = apps_parent.join("com.patriksvensk.maskera").join("models");
+            for cand in [
+                maskera_root.join("judge").join(spec.filename),
+                maskera_root.join(spec.filename),
+            ] {
+                if let Some(bytes) = is_valid_gguf_for_spec(&cand, spec) {
+                    return Some(ResolvedModelPath {
+                        path: cand,
+                        bytes,
+                        source: "maskera",
+                    });
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn build_models_overview(app: &AppHandle) -> ModelsOverview {
+    let loaded_id = ENGINE
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|e| e.model_id.clone()));
+
+    let state = {
+        let _g = STATE_LOCK.lock().ok();
+        read_state_unlocked(app)
+    };
+
+    let mut entries = Vec::with_capacity(ALL_MODELS.len());
+    for spec in ALL_MODELS {
+        let resolved = resolve_model_file(app, spec);
+        let is_loaded = loaded_id.as_deref() == Some(spec.id);
+        let installed = is_loaded || resolved.is_some();
+        let file_size_bytes = resolved.as_ref().map(|r| r.bytes).unwrap_or(0);
+        let source = resolved.as_ref().map(|r| r.source).unwrap_or("");
+        let can_delete = source == "loki";
+
+        entries.push(ModelEntryStatus {
+            id: spec.id.to_string(),
+            label: spec.label.to_string(),
+            short_label: spec.short_label.to_string(),
+            description: spec.description.to_string(),
+            filename: spec.filename.to_string(),
+            expected_bytes: spec.expected_bytes,
+            file_size_bytes,
+            installed,
+            loaded: is_loaded,
+            source: source.to_string(),
+            can_delete,
+        });
+    }
+
+    let any_installed = entries.iter().any(|m| m.installed);
+
+    // Om vald aktiv modell inte är installerad men den andra modellen är installerad, peka på den installerade
+    let mut active_id = state.active_model_id;
+    let active_installed = entries
+        .iter()
+        .find(|m| m.id == active_id)
+        .map(|m| m.installed)
+        .unwrap_or(false);
+    if !active_installed {
+        if let Some(first_inst) = entries.iter().find(|m| m.installed) {
+            active_id = first_inst.id.clone();
+        } else {
+            active_id = "e2b".to_string();
+        }
+    }
+
+    let active_bytes = entries
+        .iter()
+        .find(|m| m.id == active_id)
+        .map(|m| {
+            if m.file_size_bytes > 0 {
+                m.file_size_bytes
+            } else {
+                m.expected_bytes
+            }
+        })
+        .unwrap_or(MODEL_E2B.expected_bytes);
+
+    let total_ram_gb = summarizer::detect_total_ram_gb();
+    let safe_ctx_tokens = summarizer::safe_ctx_ceiling(total_ram_gb, active_bytes);
+
+    ModelsOverview {
+        active_model_id: active_id,
+        loaded_model_id: loaded_id,
+        any_installed,
+        total_ram_gb,
+        safe_ctx_tokens,
+        models: entries,
+    }
+}
+
+// ── Tauri-kommandon: Modeller ────────────────────────────────────────────────
 
 #[tauri::command]
-fn list_models(app: tauri::AppHandle) -> Vec<ModelInfo> {
-	let models_dir = get_app_dir(&app).join("models");
-	let mut models = Vec::new();
-
-	if let Ok(entries) = fs::read_dir(&models_dir) {
-		for entry in entries.flatten() {
-			let path = entry.path();
-			if path.extension().map_or(false, |ext| ext == "gguf") {
-				if let Ok(metadata) = fs::metadata(&path) {
-					let filename = path.file_name()
-						.unwrap_or_default()
-						.to_string_lossy()
-						.to_string();
-					let name = filename
-						.trim_end_matches(".gguf")
-						.replace('-', " ")
-						.replace('_', " ");
-					models.push(ModelInfo {
-						name,
-						filename: filename.clone(),
-						path: path.to_string_lossy().to_string(),
-						size_bytes: metadata.len(),
-					});
-				}
-			}
-		}
-	}
-
-	models
+fn get_models_status(app: AppHandle) -> Result<ModelsOverview, String> {
+    Ok(build_models_overview(&app))
 }
 
 #[tauri::command]
-fn list_available_models(app: tauri::AppHandle) -> Vec<model_download::ModelStatus> {
-	model_download::list_models_with_status(&app)
+fn cancel_model_download() {
+    DOWNLOAD_CANCEL.store(true, Ordering::SeqCst);
 }
 
 #[tauri::command]
-async fn download_model_cmd(model_id: String, app: tauri::AppHandle) -> Result<String, String> {
-	model_download::download_model(model_id, app).await
+async fn select_active_model(model_id: String, app: AppHandle) -> Result<ModelsOverview, String> {
+    let spec = get_model_spec(&model_id)
+        .ok_or_else(|| format!("Okänd modellidentifierare: {model_id}"))?;
+
+    {
+        let _g = STATE_LOCK
+            .lock()
+            .map_err(|e| format!("Låsfel för inställningar: {e}"))?;
+        let mut st = read_state_unlocked(&app);
+        st.active_model_id = spec.id.to_string();
+        write_state_unlocked(&app, &st)?;
+    }
+
+    if let Some(resolved) = resolve_model_file(&app, spec) {
+        let app_c = app.clone();
+        tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+            let mut guard = ENGINE
+                .lock()
+                .map_err(|e| format!("Låsfel för LLM-motor: {e}"))?;
+            let already_loaded = guard
+                .as_ref()
+                .map(|e| e.model_id == spec.id)
+                .unwrap_or(false);
+            if !already_loaded {
+                // Släpp först eventuell annan modell ur RAM innan den nya mmap-laddas
+                *guard = None;
+                let _ = app_c.emit(
+                    "model_download_progress",
+                    ModelDownloadProgress {
+                        model_id: spec.id.to_string(),
+                        phase: "loading".to_string(),
+                        label: format!("Laddar in {} i arbetsminnet…", spec.short_label),
+                        downloaded_bytes: resolved.bytes,
+                        total_bytes: resolved.bytes,
+                    },
+                );
+                let eng = SummarizerEngine::load(spec, &resolved.path)?;
+                *guard = Some(eng);
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("Trådfel vid modellbyte: {e}"))??;
+    }
+
+    Ok(build_models_overview(&app))
 }
 
 #[tauri::command]
-fn delete_model_cmd(model_id: String, app: tauri::AppHandle) -> Result<(), String> {
-	let models_dir = get_app_dir(&app).join("models");
-	let entry = model_download::model_registry()
-		.into_iter()
-		.find(|e| e.id == model_id)
-		.ok_or_else(|| format!("Okänd modell: {}", model_id))?;
+async fn download_model(model_id: String, app: AppHandle) -> Result<ModelsOverview, String> {
+    use futures_util::StreamExt;
 
-	let dest = models_dir.join(&entry.filename);
-	if dest.exists() {
-		fs::remove_file(&dest).map_err(|e| format!("Kunde inte ta bort fil: {}", e))?;
-	}
-	Ok(())
+    let spec = get_model_spec(&model_id)
+        .ok_or_else(|| format!("Okänd modellidentifierare: {model_id}"))?;
+
+    DOWNLOAD_CANCEL.store(false, Ordering::SeqCst);
+
+    // Om filen redan finns (t.ex. via Maskera eller lokal mapp), aktivera och ladda den direkt!
+    if resolve_model_file(&app, spec).is_some() {
+        return select_active_model(model_id, app).await;
+    }
+
+    let dest_dir = loki_models_dir(&app)?;
+    let dest_path = dest_dir.join(spec.filename);
+    let tmp_path = dest_dir.join(format!("{}.part", spec.filename));
+
+    let _ = app.emit(
+        "model_download_progress",
+        ModelDownloadProgress {
+            model_id: spec.id.to_string(),
+            phase: "downloading".to_string(),
+            label: format!("Ansluter för att hämta {}…", spec.label),
+            downloaded_bytes: 0,
+            total_bytes: spec.expected_bytes,
+        },
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3600))
+        .build()
+        .map_err(|e| format!("Kunde inte starta HTTP-klient: {e}"))?;
+
+    let resp = client
+        .get(spec.hf_url)
+        .send()
+        .await
+        .map_err(|e| format!("Nätverksfel vid hämtning av {}: {e}", spec.label))?;
+
+    if !resp.status().is_success() {
+        return Err(format!(
+            "Servern svarade med HTTP {} vid hämtning av {}.",
+            resp.status(),
+            spec.filename
+        ));
+    }
+
+    let total_bytes = resp.content_length().unwrap_or(spec.expected_bytes);
+    let mut file = std::fs::File::create(&tmp_path)
+        .map_err(|e| format!("Kunde inte skapa temporär fil på disk: {e}"))?;
+
+    let mut downloaded: u64 = 0;
+    let mut stream = resp.bytes_stream();
+    let mut last_emit = Instant::now()
+        .checked_sub(Duration::from_millis(100))
+        .unwrap_or_else(Instant::now);
+
+    while let Some(chunk_res) = stream.next().await {
+        if DOWNLOAD_CANCEL.load(Ordering::Relaxed) {
+            drop(file);
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err("AVBRUTEN".to_string());
+        }
+
+        let chunk =
+            chunk_res.map_err(|e| format!("Avbrott i nätverksströmmen för {}: {e}", spec.label))?;
+        file.write_all(&chunk)
+            .map_err(|e| format!("Kunde inte skriva till disk (kontrollera ledigt utrymme): {e}"))?;
+        downloaded += chunk.len() as u64;
+
+        if last_emit.elapsed() >= Duration::from_millis(45) {
+            last_emit = Instant::now();
+            let _ = app.emit(
+                "model_download_progress",
+                ModelDownloadProgress {
+                    model_id: spec.id.to_string(),
+                    phase: "downloading".to_string(),
+                    label: format!("Hämtar {}…", spec.label),
+                    downloaded_bytes: downloaded,
+                    total_bytes: total_bytes.max(downloaded),
+                },
+            );
+        }
+    }
+
+    drop(file);
+    if std::fs::rename(&tmp_path, &dest_path).is_err() {
+        std::fs::copy(&tmp_path, &dest_path)
+            .map_err(|e| format!("Kunde inte slutföra modellfilen på disk: {e}"))?;
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+
+    select_active_model(spec.id.to_string(), app).await
 }
 
-// ─── Binary Management ───────────────────────────────────
-
-/// Returns the installed llama-server release tag (e.g. "b5262"), or null if unknown.
+/// Offline-import av GGUF-modell(er) från en lokal mapp eller fil (t.ex. USB-sticka eller IT-utdelning).
 #[tauri::command]
-fn get_server_binary_version(app: tauri::AppHandle) -> Option<String> {
-	llama_server::get_installed_version(&app)
+async fn import_model_from_path(src_path: String, app: AppHandle) -> Result<ModelsOverview, String> {
+    let root = PathBuf::from(&src_path);
+    if !root.exists() {
+        return Err("Den valda filen eller mappen finns inte.".to_string());
+    }
+
+    let dest_dir = loki_models_dir(&app)?;
+    let mut matched: Vec<(&'static ModelSpec, PathBuf)> = Vec::new();
+
+    if root.is_file() {
+        let fname_lower = root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if fname_lower.contains("e4b") && is_valid_gguf_for_spec(&root, &MODEL_E4B).is_some() {
+            matched.push((&MODEL_E4B, root.clone()));
+        } else if is_valid_gguf_for_spec(&root, &MODEL_E2B).is_some() {
+            matched.push((&MODEL_E2B, root.clone()));
+        }
+    } else {
+        let search_dirs = [
+            root.clone(),
+            root.join("models"),
+            root.join("models").join("judge"),
+        ];
+        for spec in ALL_MODELS {
+            for d in &search_dirs {
+                let exact = d.join(spec.filename);
+                if is_valid_gguf_for_spec(&exact, spec).is_some() {
+                    matched.push((spec, exact));
+                    break;
+                }
+            }
+        }
+    }
+
+    if matched.is_empty() {
+        return Err(format!(
+            "Hittade varken {} eller {} i den valda platsen.",
+            MODEL_E2B.filename, MODEL_E4B.filename
+        ));
+    }
+
+    let chosen_id = matched[0].0.id.to_string();
+    let app_c = app.clone();
+
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        for (spec, src_file) in matched {
+            let dst = dest_dir.join(spec.filename);
+            if src_file != dst {
+                let _ = app_c.emit(
+                    "model_download_progress",
+                    ModelDownloadProgress {
+                        model_id: spec.id.to_string(),
+                        phase: "copying".to_string(),
+                        label: format!("Kopierar {} från lokal mapp…", spec.label),
+                        downloaded_bytes: 0,
+                        total_bytes: spec.expected_bytes,
+                    },
+                );
+                std::fs::copy(&src_file, &dst)
+                    .map_err(|e| format!("Kunde inte kopiera {}: {e}", spec.filename))?;
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Trådfel vid modellimport: {e}"))??;
+
+    select_active_model(chosen_id, app).await
 }
 
-/// Removes the current llama-server binary so the next server start re-downloads the latest release.
 #[tauri::command]
-fn update_server_binary(app: tauri::AppHandle) -> Result<(), String> {
-	llama_server::clear_server_binary(&app)
+async fn delete_model(model_id: String, app: AppHandle) -> Result<ModelsOverview, String> {
+    let spec = get_model_spec(&model_id)
+        .ok_or_else(|| format!("Okänd modellidentifierare: {model_id}"))?;
+
+    DOWNLOAD_CANCEL.store(true, Ordering::SeqCst);
+
+    // Frigör alltid modellen ur RAM först så att operativsystemet släpper mmap-lås på Windows/macOS!
+    {
+        let mut guard = ENGINE
+            .lock()
+            .map_err(|e| format!("Låsfel vid avinstallation av modell: {e}"))?;
+        if guard.as_ref().map(|e| e.model_id == spec.id).unwrap_or(false) {
+            *guard = None;
+        }
+    }
+
+    if let Ok(ldir) = loki_models_dir(&app) {
+        let main_file = ldir.join(spec.filename);
+        let part_file = ldir.join(format!("{}.part", spec.filename));
+        if main_file.exists() {
+            std::fs::remove_file(&main_file)
+                .map_err(|e| format!("Kunde inte ta bort modellfilen på disk: {e}"))?;
+        }
+        if part_file.exists() {
+            let _ = std::fs::remove_file(&part_file);
+        }
+    }
+
+    Ok(build_models_overview(&app))
 }
 
-/// Returns true if the llama-server binary file exists (even if version.txt is missing).
+// ── Tauri-kommandon: Transkripttvätt, Dokumentimport & Export ────────────────
+
 #[tauri::command]
-fn server_binary_exists(app: tauri::AppHandle) -> bool {
-	llama_server::server_binary_path(&app).exists()
+fn clean_transcript_text(
+    raw: String,
+    file_ext: Option<String>,
+) -> transcript::CleanedTranscript {
+    let mut cleaned = transcript::clean_transcript(&raw, file_ext.as_deref());
+    // Om modellen redan ligger ledig i RAM, förfina tokenuppskattningen med exakt vokabulärräkning
+    if !cleaned.text.is_empty() {
+        if let Ok(guard) = ENGINE.try_lock() {
+            if let Some(eng) = guard.as_ref() {
+                cleaned.stats.estimated_tokens = eng.count_tokens(&cleaned.text);
+            }
+        }
+    }
+    cleaned
 }
 
-/// Downloads (or re-downloads) the llama-server binary and returns the installed version tag.
 #[tauri::command]
-async fn download_server_binary(app: tauri::AppHandle) -> Result<String, String> {
-	llama_server::ensure_server_binary(&app).await?;
-	Ok(llama_server::get_installed_version(&app).unwrap_or_else(|| "okänd".to_string()))
+async fn import_document_bytes(
+    file_name: String,
+    bytes: Vec<u8>,
+    clean_as_transcript: bool,
+) -> Result<documents::ImportedDocument, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut doc = documents::import_document_bytes(&file_name, &bytes, clean_as_transcript)?;
+        if let Some(ref mut stats) = doc.transcript_stats {
+            if !doc.text.is_empty() {
+                if let Ok(guard) = ENGINE.try_lock() {
+                    if let Some(eng) = guard.as_ref() {
+                        stats.estimated_tokens = eng.count_tokens(&doc.text);
+                    }
+                }
+            }
+        }
+        Ok(doc)
+    })
+    .await
+    .map_err(|e| format!("Trådfel vid dokumentinläsning: {e}"))?
 }
 
-// ─── Server Lifecycle ────────────────────────────────────
-
-/// Resultat av att starta servern: URL + om vi föll tillbaka till CPU.
-#[derive(Serialize)]
-struct StartServerResult {
-	url: String,
-	#[serde(rename = "fellBackToCpu")]
-	fell_back_to_cpu: bool,
-}
-
-/// Starta llama-server med vald modell.
 #[tauri::command]
-async fn start_server(
-	model_path: String,
-	context_size: Option<u32>,
-	gpu_index: Option<i32>,
-	engine: tauri::State<'_, inference::SharedEngine>,
-	app: tauri::AppHandle,
-) -> Result<StartServerResult, String> {
-	let bin_path = llama_server::ensure_server_binary(&app).await?;
-
-	let engine_clone = engine.inner().clone();
-	let log_dir = app.path().app_log_dir().ok();
-	tokio::task::spawn_blocking(move || {
-		let mut eng = engine_clone.lock().map_err(|e| format!("Lock-fel: {}", e))?;
-		eng.set_server_binary(bin_path);
-		let port = eng.start(&model_path, context_size, gpu_index, log_dir)?;
-		Ok(StartServerResult {
-			url: format!("http://127.0.0.1:{}", port),
-			fell_back_to_cpu: eng.fell_back_to_cpu(),
-		})
-	})
-	.await
-	.map_err(|e| format!("Tokio join error: {}", e))?
+async fn export_docx_file(
+    path: String,
+    title: String,
+    subtitle: Option<String>,
+    markdown: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let docx_bytes =
+            documents::export_markdown_to_docx_bytes(&title, subtitle.as_deref(), &markdown)?;
+        std::fs::write(&path, docx_bytes)
+            .map_err(|e| format!("Kunde inte spara Word-filen (.docx): {e}"))
+    })
+    .await
+    .map_err(|e| format!("Trådfel vid Word-export: {e}"))?
 }
 
-/// Stäng av llama-server.
 #[tauri::command]
-fn stop_server(engine: tauri::State<'_, inference::SharedEngine>) -> Result<(), String> {
-	let mut eng = engine.lock().map_err(|e| format!("Lock-fel: {}", e))?;
-	eng.stop();
-	Ok(())
+fn write_text_file(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, content.as_bytes())
+        .map_err(|e| format!("Kunde inte spara filen: {e}"))
 }
 
-/// Returnera aktuell server-URL om servern körs, annars null.
+// ── Tauri-kommandon: Sammanfattning & Justering (In-Process Streaming) ───────
+
 #[tauri::command]
-fn get_server_url(engine: tauri::State<'_, inference::SharedEngine>) -> Option<String> {
-	engine.lock().ok().and_then(|eng| eng.server_url())
+fn cancel_summarize() {
+    SUMMARIZE_CANCEL.store(true, Ordering::SeqCst);
 }
 
-/// Returns true if the llama-server process is currently responding.
+fn ensure_engine_for_model(
+    guard: &mut Option<SummarizerEngine>,
+    app: &AppHandle,
+    requested_model_id: Option<&str>,
+) -> Result<(), String> {
+    let overview = build_models_overview(app);
+    let target_id = requested_model_id.unwrap_or(&overview.active_model_id);
+    let spec = get_model_spec(target_id).unwrap_or(&MODEL_E2B);
+
+    let already_loaded = guard
+        .as_ref()
+        .map(|e| e.model_id == spec.id)
+        .unwrap_or(false);
+    if already_loaded {
+        return Ok(());
+    }
+
+    let resolved = resolve_model_file(app, spec)
+        .or_else(|| {
+            // Om önskad modell inte finns, fall tillbaka på den modell som faktiskt är installerad
+            ALL_MODELS
+                .iter()
+                .find_map(|alt| resolve_model_file(app, alt).map(|r| (alt, r)))
+                .map(|(_, r)| r)
+        })
+        .ok_or_else(|| {
+            "Ingen lokal språkmodell är installerad ännu. Hämta Gemma 4 E2B i startkortet först."
+                .to_string()
+        })?;
+
+    let load_spec = if resolved.path.to_string_lossy().contains("E4B") {
+        &MODEL_E4B
+    } else {
+        &MODEL_E2B
+    };
+
+    *guard = None;
+    let _ = app.emit(
+        "summarize_progress",
+        summarizer::SummarizeProgressPayload {
+            phase: "loading_model".to_string(),
+            label: format!("Laddar in {} i minnet…", load_spec.short_label),
+            prefill_percent: 0,
+            kv_reused_tokens: 0,
+            prompt_tokens: 0,
+            thinking_tokens: 0,
+            generated_tokens: 0,
+            tokens_per_sec: 0.0,
+            chunk_current: None,
+            chunk_total: None,
+        },
+    );
+
+    let eng = SummarizerEngine::load(load_spec, &resolved.path)?;
+    *guard = Some(eng);
+    Ok(())
+}
+
 #[tauri::command]
-fn check_server_health(engine: tauri::State<'_, inference::SharedEngine>) -> bool {
-	engine.lock().ok().map_or(false, |eng| eng.server_is_alive())
+async fn summarize_meeting(
+    request: SummarizeRequest,
+    app: AppHandle,
+) -> Result<SummarizeResult, String> {
+    SUMMARIZE_CANCEL.store(false, Ordering::SeqCst);
+
+    tauri::async_runtime::spawn_blocking(move || -> Result<SummarizeResult, String> {
+        let mut guard = ENGINE
+            .lock()
+            .map_err(|e| format!("Låsfel för LLM-motor: {e}"))?;
+
+        ensure_engine_for_model(&mut guard, &app, request.model_id.as_deref())?;
+
+        let engine = guard
+            .as_mut()
+            .ok_or_else(|| "Språkmodellen kunde inte initieras.".to_string())?;
+
+        engine.run_summarize(
+            &request,
+            &SUMMARIZE_CANCEL,
+            |prog| {
+                let _ = app.emit("summarize_progress", prog);
+            },
+            |chunk| {
+                let _ = app.emit("summarize_chunk", chunk);
+            },
+        )
+    })
+    .await
+    .map_err(|e| format!("Trådfel under sammanfattning: {e}"))?
 }
 
-/// If the server is dead but a model was previously loaded, restarts it.
-/// Returns the new server URL on restart, or null if already alive / nothing to restart.
 #[tauri::command]
-async fn restart_server_if_dead(
-	engine: tauri::State<'_, inference::SharedEngine>,
-) -> Result<Option<String>, String> {
-	let engine_clone = engine.inner().clone();
-	tokio::task::spawn_blocking(move || {
-		let mut eng = engine_clone.lock().map_err(|e| format!("Lock-fel: {}", e))?;
-		eng.restart_if_dead()
-	})
-	.await
-	.map_err(|e| format!("Tokio join error: {}", e))?
+async fn adjust_meeting_result(
+    current_markdown: String,
+    directive: String,
+    model_id: Option<String>,
+    app: AppHandle,
+) -> Result<SummarizeResult, String> {
+    SUMMARIZE_CANCEL.store(false, Ordering::SeqCst);
+
+    tauri::async_runtime::spawn_blocking(move || -> Result<SummarizeResult, String> {
+        let mut guard = ENGINE
+            .lock()
+            .map_err(|e| format!("Låsfel för LLM-motor: {e}"))?;
+
+        ensure_engine_for_model(&mut guard, &app, model_id.as_deref())?;
+
+        let engine = guard
+            .as_mut()
+            .ok_or_else(|| "Språkmodellen kunde inte initieras.".to_string())?;
+
+        engine.run_adjust(
+            &current_markdown,
+            &directive,
+            &SUMMARIZE_CANCEL,
+            |prog| {
+                let _ = app.emit("summarize_progress", prog);
+            },
+            |chunk| {
+                let _ = app.emit("summarize_chunk", chunk);
+            },
+        )
+    })
+    .await
+    .map_err(|e| format!("Trådfel vid dokumentjustering: {e}"))?
 }
 
-// ─── Tauri App Entry ─────────────────────────────────────
+// ── Tauri-kommandon: Lokal Historik, Egna Mallar & Sparade Sammanhang ────────
+
+#[tauri::command]
+fn load_local_state(app: AppHandle) -> Result<LocalAppState, String> {
+    let _g = STATE_LOCK
+        .lock()
+        .map_err(|e| format!("Låsfel för lokalt tillstånd: {e}"))?;
+    Ok(read_state_unlocked(&app))
+}
+
+#[tauri::command]
+fn save_custom_templates(
+    templates: Vec<StoredCustomTemplate>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let _g = STATE_LOCK
+        .lock()
+        .map_err(|e| format!("Låsfel för lokalt tillstånd: {e}"))?;
+    let mut state = read_state_unlocked(&app);
+    state.custom_templates = templates;
+    write_state_unlocked(&app, &state)
+}
+
+#[tauri::command]
+fn save_context_presets(
+    contexts: Vec<SavedContextPreset>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let _g = STATE_LOCK
+        .lock()
+        .map_err(|e| format!("Låsfel för lokalt tillstånd: {e}"))?;
+    let mut state = read_state_unlocked(&app);
+    state.saved_contexts = contexts;
+    write_state_unlocked(&app, &state)
+}
+
+#[tauri::command]
+fn save_history_entry(entry: HistoryEntry, app: AppHandle) -> Result<Vec<HistoryEntry>, String> {
+    let _g = STATE_LOCK
+        .lock()
+        .map_err(|e| format!("Låsfel för lokalt tillstånd: {e}"))?;
+    let mut state = read_state_unlocked(&app);
+    if let Some(existing) = state.history.iter_mut().find(|h| h.id == entry.id) {
+        *existing = entry;
+    } else {
+        state.history.insert(0, entry);
+        if state.history.len() > 150 {
+            state.history.truncate(150);
+        }
+    }
+    write_state_unlocked(&app, &state)?;
+    Ok(state.history)
+}
+
+#[tauri::command]
+fn delete_history_entry(id: String, app: AppHandle) -> Result<Vec<HistoryEntry>, String> {
+    let _g = STATE_LOCK
+        .lock()
+        .map_err(|e| format!("Låsfel för lokalt tillstånd: {e}"))?;
+    let mut state = read_state_unlocked(&app);
+    state.history.retain(|h| h.id != id);
+    write_state_unlocked(&app, &state)?;
+    Ok(state.history)
+}
+
+#[tauri::command]
+fn clear_all_history(app: AppHandle) -> Result<(), String> {
+    let _g = STATE_LOCK
+        .lock()
+        .map_err(|e| format!("Låsfel för lokalt tillstånd: {e}"))?;
+    let mut state = read_state_unlocked(&app);
+    state.history.clear();
+    write_state_unlocked(&app, &state)
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-	let engine = inference::create_engine();
-
-	let app = tauri::Builder::default()
-		.plugin(tauri_plugin_opener::init())
-		.plugin(tauri_plugin_dialog::init())
-		.setup(|app| {
-			ensure_dirs(app.handle());
-			model_download::cleanup_unknown_models(app.handle());
-			Ok(())
-		})
-		.manage(engine.clone())
-		.invoke_handler(tauri::generate_handler![
-			// Model management
-			list_models,
-			list_available_models,
-			download_model_cmd,
-			delete_model_cmd,
-			// Binary management
-			get_server_binary_version,
-			update_server_binary,
-			server_binary_exists,
-			download_server_binary,
-			// Server lifecycle
-			start_server,
-			stop_server,
-			get_server_url,
-			check_server_health,
-			restart_server_if_dead,
-			// System
-			get_system_info,
-			// File export
-			save_text_file,
-		])
-		.build(tauri::generate_context!())
-		.expect("error while building tauri application");
-
-	app.run(move |_app_handle, event| match event {
-		tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
-			if let Ok(mut eng) = engine.lock() {
-				eng.stop();
-			}
-		}
-		_ => {}
-	});
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![
+            get_models_status,
+            select_active_model,
+            download_model,
+            cancel_model_download,
+            import_model_from_path,
+            delete_model,
+            clean_transcript_text,
+            import_document_bytes,
+            export_docx_file,
+            write_text_file,
+            summarize_meeting,
+            adjust_meeting_result,
+            cancel_summarize,
+            load_local_state,
+            save_custom_templates,
+            save_context_presets,
+            save_history_entry,
+            delete_history_entry,
+            clear_all_history,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running Loki application");
 }

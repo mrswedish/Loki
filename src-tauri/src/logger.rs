@@ -93,3 +93,4 @@ pub fn clear_logs() -> Result<(), String> {
         .map_err(|e| format!("Låsfel för loggfil: {e}"))?;
     fs::write(path, b"").map_err(|e| format!("Kunde inte rensa loggfilen: {e}"))
 }
+

@@ -27,7 +27,25 @@ static LOADED_MODEL_SLOT: AtomicU8 = AtomicU8::new(SLOT_NONE);
 
 static SUMMARIZE_CANCEL: AtomicBool = AtomicBool::new(false);
 static DOWNLOAD_CANCEL: AtomicBool = AtomicBool::new(false);
+static APP_EXITING: AtomicBool = AtomicBool::new(false);
 static STATE_LOCK: Mutex<()> = Mutex::new(());
+
+/// Frigör alltid `SummarizerEngine` (`LlamaContext` först, därefter `LlamaModel`) explicit INNAN
+/// `tao::EventLoop` anropar `std::process::exit(0)`. Annars ligger Metal residency sets (`rsets`)
+/// respektive Vulkan-resurser kvar i `static ENGINE` när C++ globala destruktorer körs i
+/// `__cxa_finalize_ranges`, vilket utlöser `GGML_ASSERT([rsets->data count] == 0)` -> `SIGABRT`!
+fn shutdown_engine() {
+    APP_EXITING.store(true, Ordering::SeqCst);
+    SUMMARIZE_CANCEL.store(true, Ordering::SeqCst);
+    DOWNLOAD_CANCEL.store(true, Ordering::SeqCst);
+    let mut guard = ENGINE.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.is_some() {
+        logger::log_info("Frigör LLM-motor och GPU-resurser inför avslut…");
+        *guard = None;
+        sync_loaded_slot(&guard);
+        logger::log_info("LLM-motor frigjord rent.");
+    }
+}
 
 fn sync_loaded_slot(guard: &Option<SummarizerEngine>) {
     let slot = match guard.as_ref().map(|e| e.model_id.as_str()) {
@@ -1011,13 +1029,19 @@ pub fn run() {
             // Värm upp språkmodellen i bakgrunden direkt vid uppstart om den redan finns på disk (t.ex. via Maskera!)
             let handle = app.handle().clone();
             tauri::async_runtime::spawn_blocking(move || {
+                if APP_EXITING.load(Ordering::SeqCst) {
+                    return;
+                }
                 let ov = build_models_overview(&handle);
-                if ov.any_installed {
+                if ov.any_installed && !APP_EXITING.load(Ordering::SeqCst) {
                     logger::log_info(&format!(
                         "Förladdar aktiv språkmodell ({}) i bakgrunden…",
                         ov.active_model_id
                     ));
                     if let Ok(mut guard) = ENGINE.lock() {
+                        if APP_EXITING.load(Ordering::SeqCst) {
+                            return;
+                        }
                         if let Err(e) =
                             ensure_engine_for_model(&mut guard, &handle, Some(&ov.active_model_id))
                         {
@@ -1032,6 +1056,14 @@ pub fn run() {
             });
 
             Ok(())
+        })
+        .on_window_event(|_window, event| {
+            if matches!(
+                event,
+                tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
+            ) {
+                shutdown_engine();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_models_status,
@@ -1056,8 +1088,16 @@ pub fn run() {
             get_log_info,
             clear_log_file,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Loki application");
+        .build(tauri::generate_context!())
+        .expect("error while building Loki application")
+        .run(|_app_handle, event| {
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
+                shutdown_engine();
+            }
+        });
 }
 
 #[cfg(test)]

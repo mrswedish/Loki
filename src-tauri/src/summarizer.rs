@@ -221,16 +221,37 @@ pub struct SummarizeResult {
 
 static LLAMA_BACKEND: OnceLock<Result<LlamaBackend, String>> = OnceLock::new();
 
+pub fn accelerator_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Metal (Apple Silicon)"
+    } else if cfg!(feature = "vulkan") {
+        "Vulkan (GPU)"
+    } else {
+        "CPU (SIMD/AVX2)"
+    }
+}
+
 pub fn ensure_llama_backend() -> Result<&'static LlamaBackend, String> {
     let res = LLAMA_BACKEND.get_or_init(|| {
+        crate::logger::log_info(&format!(
+            "Initierar llama.cpp-backend ({})…",
+            accelerator_label()
+        ));
         let mut backend = LlamaBackend::init()
             .map_err(|e| format!("Kunde inte initiera lokal LLM-motor (llama.cpp): {e}"))?;
         backend.void_logs();
+        crate::logger::log_info(&format!(
+            "llama.cpp-backend initierad (supports_gpu_offload={})",
+            backend.supports_gpu_offload()
+        ));
         Ok(backend)
     });
     match res {
         Ok(b) => Ok(b),
-        Err(e) => Err(e.clone()),
+        Err(e) => {
+            crate::logger::log_error(e);
+            Err(e.clone())
+        }
     }
 }
 
@@ -509,18 +530,30 @@ impl SummarizerEngine {
             .map(|m| m.len())
             .unwrap_or(spec.expected_bytes);
 
+        let t_load = Instant::now();
+        crate::logger::log_info(&format!(
+            "Laddar modell {} från {} ({:.2} GB)",
+            spec.id,
+            model_path.display(),
+            (file_bytes as f64) / 1_000_000_000.0
+        ));
+
         let backend = ensure_llama_backend()?;
         let mut model_params = LlamaModelParams::default().with_use_mmap(true);
 
-        // Aktivera Apple Silicon Metal automatiskt på macOS; på Windows körs 100 % portabel SIMD/AVX2 CPU.
-        #[cfg(target_os = "macos")]
+        // Aktivera GPU-offload automatiskt på macOS (Metal) eller i Vulkan-bygget på Windows/Linux.
+        #[cfg(any(target_os = "macos", feature = "vulkan"))]
         if backend.supports_gpu_offload() {
+            crate::logger::log_info("Aktiverar GPU-offload (n_gpu_layers=999)");
             model_params = model_params.with_n_gpu_layers(999);
         }
 
         let model = Box::new(
-            LlamaModel::load_from_file(backend, model_path, &model_params)
-                .map_err(|e| format!("Kunde inte ladda språkmodellen ({}): {e}", spec.label))?,
+            LlamaModel::load_from_file(backend, model_path, &model_params).map_err(|e| {
+                let msg = format!("Kunde inte ladda språkmodellen ({}): {e}", spec.label);
+                crate::logger::log_error(&msg);
+                msg
+            })?,
         );
 
         let total_ram_gb = detect_total_ram_gb();
@@ -529,7 +562,19 @@ impl SummarizerEngine {
         let safe_ceiling = ram_ceiling.min(train_ctx).min(MAX_CTX);
         let initial_ctx = DEFAULT_MIN_CTX.min(safe_ceiling);
 
+        crate::logger::log_info(&format!(
+            "Modellfil inläst på {} ms. RAM={:.1} GB, safe_ceiling={}, initial_ctx={}",
+            t_load.elapsed().as_millis(),
+            total_ram_gb,
+            safe_ceiling,
+            initial_ctx
+        ));
+
         let ctx = Self::create_context(&model, backend, initial_ctx)?;
+        crate::logger::log_info(&format!(
+            "Inferenskontext skapad (total laddtid {} ms)",
+            t_load.elapsed().as_millis()
+        ));
 
         Ok(Self {
             ctx: Some(ctx),
@@ -621,6 +666,19 @@ impl SummarizerEngine {
         FChunk: FnMut(SummarizeChunkPayload),
     {
         let t0 = Instant::now();
+        on_progress(SummarizeProgressPayload {
+            phase: "prefill".to_string(),
+            label: "Förbereder och tokeniserar mötestexten…".to_string(),
+            prefill_percent: 0,
+            kv_reused_tokens: 0,
+            prompt_tokens: 0,
+            thinking_tokens: 0,
+            generated_tokens: 0,
+            tokens_per_sec: 0.0,
+            chunk_current: None,
+            chunk_total: None,
+        });
+
         let (temperature, repeat_penalty, presence_penalty) = Self::effective_temperature(req);
         let margin = if req.thorough {
             RESPONSE_MARGIN_THOROUGH
@@ -639,6 +697,15 @@ impl SummarizerEngine {
         }
 
         let needed_total = (prompt_tokens.len() as u32).saturating_add(margin);
+        crate::logger::log_info(&format!(
+            "run_summarize: mall='{}', prompt_tokens={}, needed_total={}, safe_ceiling={}, thorough={}, creative={}",
+            req.template_id,
+            prompt_tokens.len(),
+            needed_total,
+            self.safe_ceiling,
+            req.thorough,
+            req.creative
+        ));
 
         if needed_total <= self.safe_ceiling {
             self.ensure_context_capacity(needed_total)?;
@@ -921,6 +988,13 @@ impl SummarizerEngine {
 
         let to_decode = &prompt_tokens[keep_len..];
         let total_to_decode = to_decode.len();
+        crate::logger::log_info(&format!(
+            "generate_from_tokens: total_prompt={}, kv_keep={}, to_decode={}, batch_size={}",
+            prompt_tokens.len(),
+            keep_len,
+            total_to_decode,
+            PREFILL_BATCH
+        ));
         let mut batch = LlamaBatch::new(PREFILL_BATCH, 1);
         let mut last_chunk_len = 0usize;
 
@@ -966,8 +1040,19 @@ impl SummarizerEngine {
                     .map_err(|e| format!("Batch-fel vid promptinläsning: {e}"))?;
             }
 
-            ctx.decode(&mut batch)
-                .map_err(|e| format!("Kunde inte läsa in mötesunderlaget i modellen: {e}"))?;
+            let t_batch = Instant::now();
+            ctx.decode(&mut batch).map_err(|e| {
+                let msg = format!("Kunde inte läsa in mötesunderlaget i modellen: {e}");
+                crate::logger::log_error(&msg);
+                msg
+            })?;
+            if step_idx == 0 {
+                crate::logger::log_info(&format!(
+                    "Första prefill-batch ({} tokens) klar på {} ms",
+                    last_chunk_len,
+                    t_batch.elapsed().as_millis()
+                ));
+            }
             self.cached_tokens
                 .extend_from_slice(&to_decode[chunk_start..chunk_end]);
         }

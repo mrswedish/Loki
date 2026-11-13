@@ -1,4 +1,5 @@
 mod documents;
+mod logger;
 mod summarizer;
 mod transcript;
 
@@ -739,10 +740,18 @@ async fn summarize_meeting(
 ) -> Result<SummarizeResult, String> {
     SUMMARIZE_CANCEL.store(false, Ordering::SeqCst);
 
+    logger::log_info(&format!(
+        "summarize_meeting anropad (mall='{}', längd={} tecken)",
+        request.template_id,
+        request.transcript.chars().count()
+    ));
+
     tauri::async_runtime::spawn_blocking(move || -> Result<SummarizeResult, String> {
+        logger::log_info("Väntar på ENGINE-lås…");
         let mut guard = ENGINE
             .lock()
             .map_err(|e| format!("Låsfel för LLM-motor: {e}"))?;
+        logger::log_info("ENGINE-lås erhållet.");
 
         ensure_engine_for_model(&mut guard, &app, request.model_id.as_deref())?;
 
@@ -750,7 +759,7 @@ async fn summarize_meeting(
             .as_mut()
             .ok_or_else(|| "Språkmodellen kunde inte initieras.".to_string())?;
 
-        engine.run_summarize(
+        let res = engine.run_summarize(
             &request,
             &SUMMARIZE_CANCEL,
             |prog| {
@@ -759,7 +768,15 @@ async fn summarize_meeting(
             |chunk| {
                 let _ = app.emit("summarize_chunk", chunk);
             },
-        )
+        );
+        match &res {
+            Ok(r) => logger::log_info(&format!(
+                "summarize_meeting klar: {} tokens på {} ms ({:.1} tok/s, strategi={})",
+                r.generated_tokens, r.duration_ms, r.tokens_per_sec, r.strategy
+            )),
+            Err(e) => logger::log_warn(&format!("summarize_meeting avslutad med: {e}")),
+        }
+        res
     })
     .await
     .map_err(|e| format!("Trådfel under sammanfattning: {e}"))?
@@ -876,11 +893,51 @@ fn clear_all_history(app: AppHandle) -> Result<(), String> {
     write_state_unlocked(&app, &state)
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogInfoPayload {
+    pub path: String,
+    pub content: String,
+    pub accelerator: String,
+}
+
+#[tauri::command]
+fn get_log_info() -> LogInfoPayload {
+    let path = logger::log_file_path()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "(okänd)".to_string());
+    let content = logger::read_recent_logs(250);
+    LogInfoPayload {
+        path,
+        content,
+        accelerator: summarizer::accelerator_label().to_string(),
+    }
+}
+
+#[tauri::command]
+fn clear_log_file() -> Result<(), String> {
+    logger::clear_logs()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            if let Ok(dir) = app.path().app_data_dir() {
+                logger::init_logger(dir);
+                logger::log_info(&format!(
+                    "Loki {} startad ({}-{}, accelerator={}, RAM={:.1} GB)",
+                    env!("CARGO_PKG_VERSION"),
+                    std::env::consts::OS,
+                    std::env::consts::ARCH,
+                    summarizer::accelerator_label(),
+                    summarizer::detect_total_ram_gb()
+                ));
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_models_status,
             select_active_model,
@@ -901,6 +958,8 @@ pub fn run() {
             save_history_entry,
             delete_history_entry,
             clear_all_history,
+            get_log_info,
+            clear_log_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Loki application");

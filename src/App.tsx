@@ -27,6 +27,8 @@ import {
   Pencil,
   Play,
   Plus,
+  RefreshCw,
+  ScrollText,
   Sparkles,
   Square,
   Sun,
@@ -204,6 +206,12 @@ export default function App() {
   const modelDialogRef = useRef<HTMLDialogElement | null>(null);
   const historyDialogRef = useRef<HTMLDialogElement | null>(null);
   const templateDialogRef = useRef<HTMLDialogElement | null>(null);
+  const logDialogRef = useRef<HTMLDialogElement | null>(null);
+  const [logInfo, setLogInfo] = useState<{
+    path: string;
+    content: string;
+    accelerator: string;
+  } | null>(null);
   const transcriptFileInputRef = useRef<HTMLInputElement | null>(null);
   const agendaFileInputRef = useRef<HTMLInputElement | null>(null);
   const templateFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -1082,6 +1090,32 @@ export default function App() {
             {history.length > 0 && (
               <span className="pill-badge-count">{history.length}</span>
             )}
+          </button>
+
+          <button
+            type="button"
+            className="header-pill-btn"
+            onClick={async () => {
+              try {
+                const info = await invoke<{
+                  path: string;
+                  content: string;
+                  accelerator: string;
+                }>("get_log_info");
+                setLogInfo(info);
+              } catch (err) {
+                setLogInfo({
+                  path: "(kunde inte läsa)",
+                  content: String(err),
+                  accelerator: "",
+                });
+              }
+              logDialogRef.current?.showModal();
+            }}
+            title="Visa lokal felsökningslogg"
+          >
+            <ScrollText size={14} aria-hidden="true" />
+            <span>Logg</span>
           </button>
 
           <button
@@ -2092,6 +2126,105 @@ export default function App() {
             type="button"
             className="tb-btn"
             onClick={() => historyDialogRef.current?.close()}
+          >
+            Stäng
+          </button>
+        </div>
+      </dialog>
+
+      {/* ── DIALOG 2B: Lokal Felsökningslogg ── */}
+      <dialog
+        ref={logDialogRef}
+        className="loki-dialog"
+        aria-labelledby="log-dialog-title"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) e.currentTarget.close();
+        }}
+      >
+        <div className="dialog-header">
+          <h2 id="log-dialog-title">Lokal felsökningslogg</h2>
+          <button
+            type="button"
+            className="icon-close-btn"
+            onClick={() => logDialogRef.current?.close()}
+            aria-label="Stäng loggfönster"
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
+        <div className="dialog-body">
+          <p className="field-hint" style={{ marginTop: 0 }}>
+            Accelerator: <strong>{logInfo?.accelerator || "Okänd"}</strong> · Fil:{" "}
+            <code>{logInfo?.path || ""}</code>
+          </p>
+          <pre
+            style={{
+              maxHeight: "340px",
+              overflow: "auto",
+              padding: "0.75rem",
+              borderRadius: "8px",
+              background: "var(--surface-2)",
+              border: "1px solid var(--border)",
+              fontSize: "0.78rem",
+              lineHeight: 1.45,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {logInfo?.content || "Ingen logg ännu."}
+          </pre>
+        </div>
+        <div className="dialog-footer dialog-footer-split">
+          <div style={{ display: "flex", gap: "0.5rem" }}>
+            <button
+              type="button"
+              className="tb-btn"
+              onClick={async () => {
+                const info = await invoke<{
+                  path: string;
+                  content: string;
+                  accelerator: string;
+                }>("get_log_info");
+                setLogInfo(info);
+              }}
+            >
+              <RefreshCw size={14} aria-hidden="true" />
+              Uppdatera
+            </button>
+            <button
+              type="button"
+              className="tb-btn"
+              onClick={async () => {
+                if (logInfo?.content) {
+                  await navigator.clipboard.writeText(logInfo.content);
+                  notifyStatus("Loggen kopierad till urklipp.");
+                }
+              }}
+            >
+              <Copy size={14} aria-hidden="true" />
+              Kopiera
+            </button>
+            <button
+              type="button"
+              className="tb-btn"
+              onClick={async () => {
+                await invoke("clear_log_file");
+                const info = await invoke<{
+                  path: string;
+                  content: string;
+                  accelerator: string;
+                }>("get_log_info");
+                setLogInfo(info);
+              }}
+            >
+              <Trash2 size={14} aria-hidden="true" />
+              Rensa
+            </button>
+          </div>
+          <button
+            type="button"
+            className="tb-btn"
+            onClick={() => logDialogRef.current?.close()}
           >
             Stäng
           </button>

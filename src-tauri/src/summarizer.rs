@@ -44,31 +44,46 @@ pub struct ModelSpec {
     pub hf_url: &'static str,
     pub expected_bytes: u64,
     pub min_valid_bytes: u64,
+    pub recommended_min_ram_gb: u32,
 }
 
 pub const MODEL_E2B: ModelSpec = ModelSpec {
     id: "e2b",
     label: "Gemma 4 E2B QAT (2,62 GB)",
     short_label: "E2B · Snabb",
-    description: "Rekommenderad standard. Snabb och resurssnål med QAT-precision – utmärkt på vanliga bärbara datorer.",
+    description: "Rekommenderad standard. Snabb och resurssnål med QAT-precision – utmärkt på alla bärbara datorer.",
     filename: "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
     hf_url: "https://huggingface.co/unsloth/gemma-4-E2B-it-qat-GGUF/resolve/main/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
     expected_bytes: 2_620_370_976,
     min_valid_bytes: 2_400_000_000,
+    recommended_min_ram_gb: 8,
 };
 
 pub const MODEL_E4B: ModelSpec = ModelSpec {
     id: "e4b",
     label: "Gemma 4 E4B QAT (4,22 GB)",
     short_label: "E4B · Fördjupad",
-    description: "Större språkmodell för extra nyanserade protokoll och svårare fackterminologi.",
+    description: "Mellanstor språkmodell för mer nyanserade protokoll och fackterminologi. Passar datorer med minst 16 GB RAM.",
     filename: "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
     hf_url: "https://huggingface.co/unsloth/gemma-4-E4B-it-qat-GGUF/resolve/main/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
     expected_bytes: 4_215_695_776,
     min_valid_bytes: 3_900_000_000,
+    recommended_min_ram_gb: 15,
 };
 
-pub const ALL_MODELS: &[ModelSpec] = &[MODEL_E2B, MODEL_E4B];
+pub const MODEL_12B: ModelSpec = ModelSpec {
+    id: "12b",
+    label: "Gemma 4 12B QAT (6,72 GB)",
+    short_label: "12B · Maximal",
+    description: "Maximal språklig skärpa och fackordstolkning för långa, komplexa möten. Rekommenderas för datorer med mer än 16 GB RAM.",
+    filename: "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+    hf_url: "https://huggingface.co/unsloth/gemma-4-12B-it-qat-GGUF/resolve/main/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+    expected_bytes: 6_716_356_800,
+    min_valid_bytes: 6_200_000_000,
+    recommended_min_ram_gb: 20,
+};
+
+pub const ALL_MODELS: &[ModelSpec] = &[MODEL_E2B, MODEL_E4B, MODEL_12B];
 
 pub fn get_model_spec(model_id: &str) -> Option<&'static ModelSpec> {
     ALL_MODELS.iter().find(|m| m.id == model_id)

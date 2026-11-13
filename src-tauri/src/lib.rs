@@ -12,16 +12,17 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use summarizer::{
     get_model_spec, ModelSpec, SummarizeRequest, SummarizeResult, SummarizerEngine, ALL_MODELS,
-    MODEL_E2B, MODEL_E4B,
+    MODEL_12B, MODEL_E2B, MODEL_E4B,
 };
 use tauri::{AppHandle, Emitter, Manager};
 
 static ENGINE: Mutex<Option<SummarizerEngine>> = Mutex::new(None);
-/// Låsfri spegling av vilken modell som är inladdad i `ENGINE` (`0 = ingen`, `1 = e2b`, `2 = e4b`).
+/// Låsfri spegling av vilken modell som är inladdad i `ENGINE` (`0 = ingen`, `1 = e2b`, `2 = e4b`, `3 = 12b`).
 /// Förhindrar all re-entrant låsning och UI-blockering när `build_models_overview` anropas under körning!
 const SLOT_NONE: u8 = 0;
 const SLOT_E2B: u8 = 1;
 const SLOT_E4B: u8 = 2;
+const SLOT_12B: u8 = 3;
 static LOADED_MODEL_SLOT: AtomicU8 = AtomicU8::new(SLOT_NONE);
 
 static SUMMARIZE_CANCEL: AtomicBool = AtomicBool::new(false);
@@ -32,6 +33,7 @@ fn sync_loaded_slot(guard: &Option<SummarizerEngine>) {
     let slot = match guard.as_ref().map(|e| e.model_id.as_str()) {
         Some("e2b") => SLOT_E2B,
         Some("e4b") => SLOT_E4B,
+        Some("12b") => SLOT_12B,
         _ => SLOT_NONE,
     };
     LOADED_MODEL_SLOT.store(slot, Ordering::SeqCst);
@@ -41,6 +43,7 @@ fn loaded_model_id_lockfree() -> Option<String> {
     match LOADED_MODEL_SLOT.load(Ordering::SeqCst) {
         SLOT_E2B => Some("e2b".to_string()),
         SLOT_E4B => Some("e4b".to_string()),
+        SLOT_12B => Some("12b".to_string()),
         _ => None,
     }
 }
@@ -57,6 +60,7 @@ pub struct ModelEntryStatus {
     pub filename: String,
     pub expected_bytes: u64,
     pub file_size_bytes: u64,
+    pub recommended_min_ram_gb: u32,
     pub installed: bool,
     pub loaded: bool,
     /// Var modellen hittades: `"loki"` | `"maskera"` | `"portable"` | `""`
@@ -226,6 +230,7 @@ struct ResolvedModelPath {
 ///    -> ger 0 GB dubbelnedladdning om Gemma 4 E2B redan installerats i Maskera!
 fn resolve_model_file(app: &AppHandle, spec: &ModelSpec) -> Option<ResolvedModelPath> {
     let legacy_alt = match spec.id {
+        "12b" => Some("google_gemma-4-12B-it-Q4_K_M.gguf"),
         "e4b" => Some("google_gemma-4-E4B-it-Q4_K_M.gguf"),
         "e2b" => Some("google_gemma-4-E2B-it-Q4_K_M.gguf"),
         _ => None,
@@ -327,6 +332,7 @@ fn build_models_overview(app: &AppHandle) -> ModelsOverview {
             filename: spec.filename.to_string(),
             expected_bytes: spec.expected_bytes,
             file_size_bytes,
+            recommended_min_ram_gb: spec.recommended_min_ram_gb,
             installed,
             loaded: is_loaded,
             source: source.to_string(),
@@ -552,7 +558,10 @@ async fn import_model_from_path(src_path: String, app: AppHandle) -> Result<Mode
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        if fname_lower.contains("e4b") && is_valid_gguf_for_spec(&root, &MODEL_E4B).is_some() {
+        if fname_lower.contains("12b") && is_valid_gguf_for_spec(&root, &MODEL_12B).is_some() {
+            matched.push((&MODEL_12B, root.clone()));
+        } else if fname_lower.contains("e4b") && is_valid_gguf_for_spec(&root, &MODEL_E4B).is_some()
+        {
             matched.push((&MODEL_E4B, root.clone()));
         } else if is_valid_gguf_for_spec(&root, &MODEL_E2B).is_some() {
             matched.push((&MODEL_E2B, root.clone()));
@@ -576,8 +585,8 @@ async fn import_model_from_path(src_path: String, app: AppHandle) -> Result<Mode
 
     if matched.is_empty() {
         return Err(format!(
-            "Hittade varken {} eller {} i den valda platsen.",
-            MODEL_E2B.filename, MODEL_E4B.filename
+            "Hittade varken {}, {} eller {} i den valda platsen.",
+            MODEL_E2B.filename, MODEL_E4B.filename, MODEL_12B.filename
         ));
     }
 
@@ -736,29 +745,18 @@ fn ensure_engine_for_model(
         return Ok(());
     }
 
-    let resolved = resolve_model_file(app, spec)
+    let (load_spec, resolved) = resolve_model_file(app, spec)
+        .map(|r| (spec, r))
         .or_else(|| {
-            // Om önskad modell inte finns, fall tillbaka på den modell som faktiskt är installerad
+            // Om önskad modell inte finns, fall tillbaka på första modell som faktiskt är installerad
             ALL_MODELS
                 .iter()
                 .find_map(|alt| resolve_model_file(app, alt).map(|r| (alt, r)))
-                .map(|(_, r)| r)
         })
         .ok_or_else(|| {
             "Ingen lokal språkmodell är installerad ännu. Hämta Gemma 4 E2B i startkortet först."
                 .to_string()
         })?;
-
-    let load_spec = if resolved
-        .path
-        .to_string_lossy()
-        .to_ascii_uppercase()
-        .contains("E4B")
-    {
-        &MODEL_E4B
-    } else {
-        &MODEL_E2B
-    };
 
     *guard = None;
     sync_loaded_slot(guard);

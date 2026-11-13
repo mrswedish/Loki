@@ -7,14 +7,15 @@ Loki förvandlar råa mötestranskriberingar och underlag till rena, välstruktu
 ## Höjdpunkter i Loki 3.0
 
 - **100 % lokalt & integritetssäkert:** All AI-bearbetning, dokumentläsning och historik stannar på datorn. Noll telemetri och noll externa AI-tjänster.
-- **Inbyggd C++/Rust-motor (`llama-cpp-2`):** Ingen extern webbserver eller krånglig installation. Kör direkt med Apple Silicon Metal på Mac och portabel flerkärnig CPU på Windows (`Loki-portabel.exe`).
+- **Inbyggd C++/Rust-motor (`llama-cpp-2`):** Ingen extern webbserver eller krånglig installation. Kör direkt med Apple Silicon Metal på Mac och portabel flerkärnig CPU (`Loki-portabel.exe`) eller Vulkan GPU (`Loki-portabel-vulkan.exe`) på Windows.
 - **Varm mötescache – byt mall på under en sekund:** När ett möte har lästs in ligger underlaget kvar varmt i minnet. Växla direkt mellan *Minnesanteckning*, *Mötesprotokoll*, *Åtgärdspunkter*, *Beslutslogg* och egna mallar utan att modellen behöver läsa om mötestexten.
 - **Bred dokumentimport (utan installerat Office):**
   - **Mötestranskript:** `.vtt`, `.srt` samt inklistrade Teams-/Zoom-transkript (rensar automatiskt bort tidsstämplar och slår ihop repliker från samma talare).
   - **Dokument & Kalkylblad:** Word (`.docx`), OpenDocument (`.odt`), Excel (`.xlsx`, `.xls`, `.ods`), PDF (`.pdf`) samt `.txt`, `.md` och `.csv` (med svensk Windows-1252-fallback).
-- **Två optimerade QAT-språkmodeller:**
+- **Tre optimerade QAT-språkmodeller:**
   - **Gemma 4 E2B QAT (`2,62 GB`, standard):** Snabb och träffsäker på vanliga bärbara datorer. *(Delas automatiskt om du redan har Maskera installerad!)*
-  - **Gemma 4 E4B QAT (`4,22 GB`, valfri):** För extra nyanserade protokoll och krävande fackterminologi.
+  - **Gemma 4 E4B QAT (`4,22 GB`, valfri):** Mellanläge för mer nyanserade protokoll och fackterminologi.
+  - **Gemma 4 12B QAT (`6,72 GB`, valfri):** Maximal språklig skärpa och fackordstolkning för långa, komplexa möten. Rekommenderas för datorer med mer än 16 GB RAM.
 - **Färdigt för Word & Outlook:** Kopiera med riktiga rubriker och punktlistor direkt till urklipp, eller exportera en formaterad **Word-fil (`.docx`)**, `.md` eller `.txt`.
 
 ---

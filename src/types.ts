@@ -31,6 +31,7 @@ export interface ModelEntryStatus {
   filename: string;
   expectedBytes: number;
   fileSizeBytes: number;
+  recommendedMinRamGb: number;
   installed: boolean;
   loaded: boolean;
   source: string; // "loki" | "maskera" | "portable" | ""

@@ -1911,7 +1911,7 @@ export default function App() {
         onChange={handleTemplatePromptFilePicked}
       />
 
-      {/* ── DIALOG 1: Språkmodeller (Gemma 4 E2B & E4B QAT) ── */}
+      {/* ── DIALOG 1: Språkmodeller (Gemma 4 E2B, E4B & 12B QAT) ── */}
       <dialog
         ref={modelDialogRef}
         className="loki-dialog"
@@ -1969,6 +1969,9 @@ export default function App() {
 
           {modelsOverview?.models.map((m) => {
             const isSelected = modelsOverview.activeModelId === m.id;
+            const lowRamForModel =
+              modelsOverview.totalRamGb > 0 &&
+              modelsOverview.totalRamGb + 0.5 < m.recommendedMinRamGb;
             return (
               <div
                 key={m.id}
@@ -1991,6 +1994,16 @@ export default function App() {
                 <p className="field-hint" style={{ margin: 0 }}>
                   {m.description}
                 </p>
+                {lowRamForModel && (
+                  <p
+                    className="field-hint"
+                    style={{ margin: 0, fontWeight: 500 }}
+                  >
+                    Obs: Denna dator har{" "}
+                    {Math.round(modelsOverview.totalRamGb)} GB RAM — E2B eller
+                    E4B ger betydligt snabbare körning här.
+                  </p>
+                )}
 
                 <div className="model-option-actions">
                   {m.installed ? (

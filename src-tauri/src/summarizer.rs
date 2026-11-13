@@ -626,10 +626,25 @@ impl SummarizerEngine {
         self.ctx = None;
         self.cached_tokens.clear();
         let backend = ensure_llama_backend()?;
-        let new_ctx = Self::create_context(&self.model, backend, target)?;
-        self.ctx = Some(new_ctx);
-        self.current_n_ctx = target;
-        Ok(())
+        match Self::create_context(&self.model, backend, target) {
+            Ok(new_ctx) => {
+                self.ctx = Some(new_ctx);
+                self.current_n_ctx = target;
+                Ok(())
+            }
+            Err(err) if target > DEFAULT_MIN_CTX => {
+                crate::logger::log_warn(&format!(
+                    "Kunde inte växa kontextfönstret till {target} tokens ({err}) — begränsar till {DEFAULT_MIN_CTX} och använder delsammanfattning."
+                ));
+                let fallback = DEFAULT_MIN_CTX.min(self.safe_ceiling);
+                let new_ctx = Self::create_context(&self.model, backend, fallback)?;
+                self.safe_ceiling = fallback;
+                self.current_n_ctx = fallback;
+                self.ctx = Some(new_ctx);
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
     }
 
     pub fn count_tokens(&self, text: &str) -> usize {
@@ -716,32 +731,34 @@ impl SummarizerEngine {
 
         if needed_total <= self.safe_ceiling {
             self.ensure_context_capacity(needed_total)?;
-            let stats = self.generate_from_tokens(
-                &prompt_tokens,
-                req.thorough,
-                temperature,
-                repeat_penalty,
-                presence_penalty,
-                None,
-                cancel_flag,
-                &mut on_progress,
-                &mut on_chunk,
-            )?;
+            if needed_total <= self.current_n_ctx {
+                let stats = self.generate_from_tokens(
+                    &prompt_tokens,
+                    req.thorough,
+                    temperature,
+                    repeat_penalty,
+                    presence_penalty,
+                    None,
+                    cancel_flag,
+                    &mut on_progress,
+                    &mut on_chunk,
+                )?;
 
-            let elapsed_ms = t0.elapsed().as_millis() as u64;
-            return Ok(SummarizeResult {
-                markdown: stats.text,
-                model_id: self.model_id.clone(),
-                model_label: self.model_label.clone(),
-                prompt_tokens: prompt_tokens.len(),
-                kv_reused_tokens: stats.kv_reused_tokens,
-                generated_tokens: stats.generated_tokens,
-                thinking_tokens: stats.thinking_tokens,
-                duration_ms: elapsed_ms,
-                tokens_per_sec: stats.tokens_per_sec,
-                strategy: "single".to_string(),
-                used_temperature: temperature,
-            });
+                let elapsed_ms = t0.elapsed().as_millis() as u64;
+                return Ok(SummarizeResult {
+                    markdown: stats.text,
+                    model_id: self.model_id.clone(),
+                    model_label: self.model_label.clone(),
+                    prompt_tokens: prompt_tokens.len(),
+                    kv_reused_tokens: stats.kv_reused_tokens,
+                    generated_tokens: stats.generated_tokens,
+                    thinking_tokens: stats.thinking_tokens,
+                    duration_ms: elapsed_ms,
+                    tokens_per_sec: stats.tokens_per_sec,
+                    strategy: "single".to_string(),
+                    used_temperature: temperature,
+                });
+            }
         }
 
         // Map-Reduce-fallback för extremt långa möten som överskrider RAM-kontexttaket
@@ -1156,7 +1173,7 @@ impl SummarizerEngine {
                     break;
                 }
 
-                if last_ui_emit.elapsed() >= Duration::from_millis(28) {
+                if last_ui_emit.elapsed() >= Duration::from_millis(45) {
                     last_ui_emit = Instant::now();
                     let secs = gen_start.elapsed().as_secs_f32().max(0.001);
                     let total_out = thinking_tokens + answer_tokens.len();

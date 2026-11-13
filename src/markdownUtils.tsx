@@ -48,6 +48,37 @@ export function renderInlineFormattedText(
   return parts.length === 1 ? parts[0] : parts;
 }
 
+const HR_RE = /^(-{3,}|\*{3,}|_{3,})$/;
+const HEADING_RE = /^(#{1,6})(?:\s+(.*))?$/;
+const UL_ITEM_RE = /^\s*[-*•]\s+/;
+const OL_ITEM_RE = /^\s*\d+[.)]\s+/;
+
+function isStandaloneBoldHeading(trimmed: string): boolean {
+  return (
+    trimmed.startsWith("**") &&
+    trimmed.endsWith("**") &&
+    trimmed.length > 4 &&
+    !trimmed.slice(2, -2).includes("**")
+  );
+}
+
+/**
+ * Avgör om en rad inleder ett nytt blockelement (och därför ska bryta ett pågående brödtextstycke).
+ * Måste exakt matcha blockgrenarna i `renderFormattedMarkdown` och `markdownToCleanHtml`.
+ */
+function isBlockStarterLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) return true;
+  if (trimmed.startsWith("```")) return true;
+  if (HR_RE.test(trimmed)) return true;
+  if (HEADING_RE.test(trimmed)) return true;
+  if (isStandaloneBoldHeading(trimmed)) return true;
+  if (UL_ITEM_RE.test(line)) return true;
+  if (OL_ITEM_RE.test(line)) return true;
+  if (trimmed.startsWith(">")) return true;
+  return false;
+}
+
 /**
  * Renderar Markdown-text som ren skandinavisk dokumenttypografi (rubriker, punktlistor,
  * checklistor, numrerade listor, citat, fetstil) helt i React JSX utan XSS-risk.
@@ -61,6 +92,7 @@ export function renderFormattedMarkdown(text: string): React.ReactNode {
   let blockKey = 0;
 
   while (i < lines.length) {
+    const prevIndex = i;
     const line = lines[i];
     const trimmed = line.trim();
 
@@ -85,17 +117,23 @@ export function renderFormattedMarkdown(text: string): React.ReactNode {
       continue;
     }
 
-    if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+    if (HR_RE.test(trimmed)) {
       blocks.push(<hr key={`md-hr-${blockKey++}`} className="md-hr" />);
       i++;
       continue;
     }
 
-    const headingMatch = trimmed.match(/^(#{1,4})\s+(.+)$/);
+    const headingMatch = trimmed.match(HEADING_RE);
     if (headingMatch) {
       const level = headingMatch[1].length;
+      const headingText = (headingMatch[2] ?? "").trim();
+      i++;
+      // Under strömning kan första token vara enbart "###" innan rubriktexten anländer
+      if (!headingText) {
+        continue;
+      }
       const content = renderInlineFormattedText(
-        headingMatch[2].trim(),
+        headingText,
         `md-h-${blockKey}`
       );
       if (level === 1) {
@@ -117,16 +155,10 @@ export function renderFormattedMarkdown(text: string): React.ReactNode {
           </h4>
         );
       }
-      i++;
       continue;
     }
 
-    if (
-      trimmed.startsWith("**") &&
-      trimmed.endsWith("**") &&
-      trimmed.length > 4 &&
-      !trimmed.slice(2, -2).includes("**")
-    ) {
+    if (isStandaloneBoldHeading(trimmed)) {
       blocks.push(
         <h3 key={`md-bh-${blockKey++}`} className="md-h2">
           {trimmed.slice(2, -2)}
@@ -137,11 +169,11 @@ export function renderFormattedMarkdown(text: string): React.ReactNode {
     }
 
     // Punktlista och checklista (- [ ] / - [x] / - / * / •)
-    if (/^\s*[-*•]\s+/.test(line)) {
+    if (UL_ITEM_RE.test(line)) {
       const items: React.ReactNode[] = [];
       let liIdx = 0;
-      while (i < lines.length && /^\s*[-*•]\s+/.test(lines[i])) {
-        const rawItem = lines[i].replace(/^\s*[-*•]\s+/, "");
+      while (i < lines.length && UL_ITEM_RE.test(lines[i])) {
+        const rawItem = lines[i].replace(UL_ITEM_RE, "");
         const unchecked = rawItem.startsWith("[ ] ");
         const checked =
           rawItem.startsWith("[x] ") || rawItem.startsWith("[X] ");
@@ -171,11 +203,11 @@ export function renderFormattedMarkdown(text: string): React.ReactNode {
       continue;
     }
 
-    if (/^\s*\d+[.)]\s+/.test(line)) {
+    if (OL_ITEM_RE.test(line)) {
       const items: React.ReactNode[] = [];
       let liIdx = 0;
-      while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) {
-        const itemText = lines[i].replace(/^\s*\d+[.)]\s+/, "");
+      while (i < lines.length && OL_ITEM_RE.test(lines[i])) {
+        const itemText = lines[i].replace(OL_ITEM_RE, "");
         items.push(
           <li key={`md-ol-li-${blockKey}-${liIdx++}`}>
             {renderInlineFormattedText(itemText, `md-ol-${blockKey}-${liIdx}`)}
@@ -205,19 +237,16 @@ export function renderFormattedMarkdown(text: string): React.ReactNode {
       continue;
     }
 
-    const paraLines: string[] = [];
-    while (
-      i < lines.length &&
-      lines[i].trim() !== "" &&
-      !lines[i].trim().startsWith("#") &&
-      !lines[i].trim().startsWith("```") &&
-      !lines[i].trim().startsWith(">") &&
-      !/^\s*[-*•]\s+/.test(lines[i]) &&
-      !/^\s*\d+[.)]\s+/.test(lines[i]) &&
-      !/^(-{3,}|\*{3,}|_{3,})$/.test(lines[i].trim())
-    ) {
+    // Konsumera ALLTID minst aktuell rad först så att loopen garanterat avancerar oavsett indata!
+    const paraLines: string[] = [lines[i]];
+    i++;
+    while (i < lines.length && !isBlockStarterLine(lines[i])) {
       paraLines.push(lines[i]);
       i++;
+    }
+
+    if (i <= prevIndex) {
+      i = prevIndex + 1;
     }
 
     blocks.push(
@@ -232,7 +261,7 @@ export function renderFormattedMarkdown(text: string): React.ReactNode {
     );
   }
 
-  return <div className="formatted-md">{blocks}</div>;
+  return blocks.length > 0 ? <div className="formatted-md">{blocks}</div> : null;
 }
 
 function escapeHtml(s: string): string {
@@ -265,6 +294,7 @@ export function markdownToCleanHtml(text: string, title?: string): string {
   let i = 0;
 
   while (i < lines.length) {
+    const prevIndex = i;
     const line = lines[i];
     const trimmed = line.trim();
     if (!trimmed) {
@@ -284,35 +314,34 @@ export function markdownToCleanHtml(text: string, title?: string): string {
       continue;
     }
 
-    if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+    if (HR_RE.test(trimmed)) {
       out.push("<hr>");
       i++;
       continue;
     }
 
-    const hm = trimmed.match(/^(#{1,4})\s+(.+)$/);
+    const hm = trimmed.match(HEADING_RE);
     if (hm) {
-      const lvl = Math.min(4, hm[1].length + 1);
-      out.push(`<h${lvl}>${formatInlineHtml(hm[2].trim())}</h${lvl}>`);
+      const headingText = (hm[2] ?? "").trim();
       i++;
+      if (!headingText) {
+        continue;
+      }
+      const lvl = Math.min(4, hm[1].length + 1);
+      out.push(`<h${lvl}>${formatInlineHtml(headingText)}</h${lvl}>`);
       continue;
     }
 
-    if (
-      trimmed.startsWith("**") &&
-      trimmed.endsWith("**") &&
-      trimmed.length > 4 &&
-      !trimmed.slice(2, -2).includes("**")
-    ) {
+    if (isStandaloneBoldHeading(trimmed)) {
       out.push(`<h3>${escapeHtml(trimmed.slice(2, -2))}</h3>`);
       i++;
       continue;
     }
 
-    if (/^\s*[-*•]\s+/.test(line)) {
+    if (UL_ITEM_RE.test(line)) {
       const items: string[] = [];
-      while (i < lines.length && /^\s*[-*•]\s+/.test(lines[i])) {
-        let itemRaw = lines[i].replace(/^\s*[-*•]\s+/, "");
+      while (i < lines.length && UL_ITEM_RE.test(lines[i])) {
+        let itemRaw = lines[i].replace(UL_ITEM_RE, "");
         if (itemRaw.startsWith("[ ] ")) {
           itemRaw = `☐ ${itemRaw.slice(4)}`;
         } else if (itemRaw.startsWith("[x] ") || itemRaw.startsWith("[X] ")) {
@@ -325,11 +354,11 @@ export function markdownToCleanHtml(text: string, title?: string): string {
       continue;
     }
 
-    if (/^\s*\d+[.)]\s+/.test(line)) {
+    if (OL_ITEM_RE.test(line)) {
       const items: string[] = [];
-      while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) {
+      while (i < lines.length && OL_ITEM_RE.test(lines[i])) {
         items.push(
-          `<li>${formatInlineHtml(lines[i].replace(/^\s*\d+[.)]\s+/, ""))}</li>`
+          `<li>${formatInlineHtml(lines[i].replace(OL_ITEM_RE, ""))}</li>`
         );
         i++;
       }
@@ -347,18 +376,14 @@ export function markdownToCleanHtml(text: string, title?: string): string {
       continue;
     }
 
-    const pLines: string[] = [];
-    while (
-      i < lines.length &&
-      lines[i].trim() !== "" &&
-      !lines[i].trim().startsWith("#") &&
-      !lines[i].trim().startsWith("```") &&
-      !lines[i].trim().startsWith(">") &&
-      !/^\s*[-*•]\s+/.test(lines[i]) &&
-      !/^\s*\d+[.)]\s+/.test(lines[i])
-    ) {
+    const pLines: string[] = [formatInlineHtml(lines[i])];
+    i++;
+    while (i < lines.length && !isBlockStarterLine(lines[i])) {
       pLines.push(formatInlineHtml(lines[i]));
       i++;
+    }
+    if (i <= prevIndex) {
+      i = prevIndex + 1;
     }
     out.push(`<p>${pLines.join("<br>")}</p>`);
   }
@@ -375,7 +400,7 @@ export function markdownToCleanPlainText(text: string): string {
     .split("\n")
     .map((line) => {
       let l = line;
-      l = l.replace(/^\s*#{1,6}\s+/, "");
+      l = l.replace(/^\s*#{1,6}\s*/, "");
       l = l.replace(/^\s*[-*]\s+\[\s\]\s+/, "☐ ");
       l = l.replace(/^\s*[-*]\s+\[[xX]\]\s+/, "☑ ");
       l = l.replace(/^\s*[-*]\s+/, "• ");
@@ -386,4 +411,3 @@ export function markdownToCleanPlainText(text: string): string {
     })
     .join("\n");
 }
-

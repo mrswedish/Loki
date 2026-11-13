@@ -1053,6 +1053,11 @@ export default function App() {
       : "chunked";
   }, [transcriptStats, modelsOverview, thoroughMode]);
 
+  const formattedResult = useMemo(
+    () => renderFormattedMarkdown(resultMarkdown),
+    [resultMarkdown]
+  );
+
   const dlPercent =
     downloadProgress && downloadProgress.totalBytes > 0
       ? Math.min(
@@ -1815,7 +1820,7 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                  {renderFormattedMarkdown(resultMarkdown)}
+                  {formattedResult}
                 </>
               ) : (
                 <div className="empty-result-placeholder">

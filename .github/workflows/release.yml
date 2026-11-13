@@ -103,9 +103,13 @@ jobs:
     env:
       LIBCLANG_PATH: "C:\\Program Files\\LLVM\\bin"
       CARGO_TARGET_DIR: D:\t
+      CMAKE_GENERATOR: Ninja
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Setup MSVC Dev Cmd (for Ninja)
+        uses: ilammy/msvc-dev-cmd@v1
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -122,9 +126,9 @@ jobs:
           git config --system core.longpaths true
           Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -Force
 
-      - name: Install Vulkan SDK
+      - name: Install Vulkan SDK & Ninja
         run: |
-          choco install vulkan-sdk -y --no-progress
+          choco install vulkan-sdk ninja -y --no-progress
           $vkDir = Get-ChildItem -Path "C:\VulkanSDK" -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
           if (-not $vkDir) {
             Write-Error "Vulkan SDK hittades inte i C:\VulkanSDK efter installation"

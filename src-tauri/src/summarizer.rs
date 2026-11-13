@@ -361,14 +361,10 @@ pub fn build_kv_friendly_prompt(req: &SummarizeRequest, map_mode_only: bool) -> 
         }
     }
 
-    let thought_turn = if req.thorough {
-        "<|turn>model\n<|channel>thought\n"
-    } else {
-        "<|turn>model\n<|channel>thought\n<channel|>"
-    };
+    let think_prefix = if req.thorough { "<|think|>" } else { "" };
 
     format!(
-        "<bos><|turn>system\n{system_block}<turn|>\n<|turn>user\n--- MÖTESTRANSKRIBERING ---\n{transcript}\n--- SLUT PÅ MÖTESTRANSKRIBERING ---\n\n--- UPPGIFT ({label}) ---\n{task_block}<turn|>\n{thought_turn}",
+        "<bos><|turn>system\n{think_prefix}{system_block}<turn|>\n<|turn>user\n--- MÖTESTRANSKRIBERING ---\n{transcript}\n--- SLUT PÅ MÖTESTRANSKRIBERING ---\n\n--- UPPGIFT ({label}) ---\n{task_block}<turn|>\n<|turn>model\n",
         transcript = req.transcript.trim(),
         label = req.template_label.trim(),
     )
@@ -394,20 +390,16 @@ pub fn build_reduce_prompt(parts: &[String], req: &SummarizeRequest) -> String {
         task_tail.push_str("\n--- SLUT AGENDA ---");
     }
 
-    let thought_turn = if req.thorough {
-        "<|turn>model\n<|channel>thought\n"
-    } else {
-        "<|turn>model\n<|channel>thought\n<channel|>"
-    };
+    let think_prefix = if req.thorough { "<|think|>" } else { "" };
 
     format!(
-        "<bos><|turn>system\n{REDUCE_PROMPT}<turn|>\n<|turn>user\n--- DELSAMMANFATTNINGAR I KRONOLOGISK ORDNING ---\n{joined_parts}\n--- SLUT PÅ DELSAMMANFATTNINGAR ---\n\n{task_tail}<turn|>\n{thought_turn}"
+        "<bos><|turn>system\n{think_prefix}{REDUCE_PROMPT}<turn|>\n<|turn>user\n--- DELSAMMANFATTNINGAR I KRONOLOGISK ORDNING ---\n{joined_parts}\n--- SLUT PÅ DELSAMMANFATTNINGAR ---\n\n{task_tail}<turn|>\n<|turn>model\n"
     )
 }
 
 pub fn build_adjust_prompt(current_markdown: &str, directive: &str) -> String {
     format!(
-        "<bos><|turn>system\n{ADJUST_PROMPT}<turn|>\n<|turn>user\n--- NUVARANDE MÖTESDOKUMENT ---\n{}\n--- SLUT PÅ DOKUMENT ---\n\n--- JUSTERINGSDIREKTIV FRÅN ANVÄNDAREN ---\n{}\n--- SLUT PÅ DIREKTIV ---<turn|>\n<|turn>model\n<|channel>thought\n<channel|>",
+        "<bos><|turn>system\n{ADJUST_PROMPT}<turn|>\n<|turn>user\n--- NUVARANDE MÖTESDOKUMENT ---\n{}\n--- SLUT PÅ DOKUMENT ---\n\n--- JUSTERINGSDIREKTIV FRÅN ANVÄNDAREN ---\n{}\n--- SLUT PÅ DIREKTIV ---<turn|>\n<|turn>model\n",
         current_markdown.trim(),
         directive.trim()
     )
@@ -539,41 +531,56 @@ impl SummarizerEngine {
         ));
 
         let backend = ensure_llama_backend()?;
-        let mut model_params = LlamaModelParams::default().with_use_mmap(true);
-
-        // Aktivera GPU-offload automatiskt på macOS (Metal) eller i Vulkan-bygget på Windows/Linux.
-        #[cfg(any(target_os = "macos", feature = "vulkan"))]
-        if backend.supports_gpu_offload() {
-            crate::logger::log_info("Aktiverar GPU-offload (n_gpu_layers=999)");
-            model_params = model_params.with_n_gpu_layers(999);
-        }
-
-        let model = Box::new(
-            LlamaModel::load_from_file(backend, model_path, &model_params).map_err(|e| {
-                let msg = format!("Kunde inte ladda språkmodellen ({}): {e}", spec.label);
-                crate::logger::log_error(&msg);
-                msg
-            })?,
-        );
-
         let total_ram_gb = detect_total_ram_gb();
         let ram_ceiling = safe_ctx_ceiling(total_ram_gb, file_bytes);
-        let train_ctx = model.n_ctx_train().max(8192);
-        let safe_ceiling = ram_ceiling.min(train_ctx).min(MAX_CTX);
-        let initial_ctx = DEFAULT_MIN_CTX.min(safe_ceiling);
+
+        let want_gpu = cfg!(any(target_os = "macos", feature = "vulkan"))
+            && backend.supports_gpu_offload();
+
+        let try_load_and_ctx = |use_gpu: bool| -> Result<(Box<LlamaModel>, LlamaContext<'static>, u32, u32), String> {
+            let mut mparams = LlamaModelParams::default().with_use_mmap(true);
+            if use_gpu {
+                crate::logger::log_info("Aktiverar GPU-offload (n_gpu_layers=999)");
+                mparams = mparams.with_n_gpu_layers(999);
+            } else {
+                mparams = mparams.with_n_gpu_layers(0);
+            }
+
+            let m = Box::new(
+                LlamaModel::load_from_file(backend, model_path, &mparams)
+                    .map_err(|e| format!("Kunde inte ladda språkmodellen ({}): {e}", spec.label))?,
+            );
+
+            let train_ctx = m.n_ctx_train().max(8192);
+            let ceiling = ram_ceiling.min(train_ctx).min(MAX_CTX);
+            let init_ctx = DEFAULT_MIN_CTX.min(ceiling);
+            let c = Self::create_context(&m, backend, init_ctx)?;
+            Ok((m, c, init_ctx, ceiling))
+        };
+
+        let (model, ctx, initial_ctx, safe_ceiling) = match try_load_and_ctx(want_gpu) {
+            Ok(ok) => ok,
+            Err(gpu_err) if want_gpu => {
+                crate::logger::log_warn(&format!(
+                    "GPU-inläsning misslyckades ({gpu_err}) — faller automatiskt tillbaka till CPU (n_gpu_layers=0)!"
+                ));
+                try_load_and_ctx(false).map_err(|cpu_err| {
+                    crate::logger::log_error(&cpu_err);
+                    cpu_err
+                })?
+            }
+            Err(e) => {
+                crate::logger::log_error(&e);
+                return Err(e);
+            }
+        };
 
         crate::logger::log_info(&format!(
-            "Modellfil inläst på {} ms. RAM={:.1} GB, safe_ceiling={}, initial_ctx={}",
+            "Modell + kontext redo på {} ms (RAM={:.1} GB, safe_ceiling={}, initial_ctx={})",
             t_load.elapsed().as_millis(),
             total_ram_gb,
             safe_ceiling,
             initial_ctx
-        ));
-
-        let ctx = Self::create_context(&model, backend, initial_ctx)?;
-        crate::logger::log_info(&format!(
-            "Inferenskontext skapad (total laddtid {} ms)",
-            t_load.elapsed().as_millis()
         ));
 
         Ok(Self {
@@ -1060,13 +1067,15 @@ impl SummarizerEngine {
         // Konfigurera sampler: ren greedy eller lätt kedja med temperatur + repetitionsstraff
         let mut sampler = build_sampler(n_vocab, temperature, repeat_penalty, presence_penalty);
 
-        // Identifiera Gemma 4 `<channel|>`-slutmarkör för tankekanalen
-        let channel_end_seq = vocab.tokenize(b"<channel|>", false, true);
-        let channel_end_tok = channel_end_seq.first().copied();
+        // Identifiera Gemma 4 `<|channel>` och `<channel|>` för tankekanalen
+        let channel_open_tok = vocab.tokenize(b"<|channel>", false, true).first().copied();
+        let channel_end_tok = vocab.tokenize(b"<channel|>", false, true).first().copied();
+        let turn_end_tok = vocab.tokenize(b"<turn|>", false, true).first().copied();
         let forced_close_seq = vocab.tokenize(b"\n<channel|>", false, true);
 
-        let mut in_thought = thorough;
+        let mut in_thought = false;
         let mut thinking_tokens = 0usize;
+        let thought_budget = if thorough { MAX_THOUGHT_TOKENS } else { 2 };
         let mut answer_tokens: Vec<LlamaToken> = Vec::with_capacity(1024);
         let mut step_batch = LlamaBatch::new(16, 1);
         let mut cur_pos = prompt_tokens.len() as i32;
@@ -1080,7 +1089,7 @@ impl SummarizerEngine {
         let max_total_steps = if thorough {
             MAX_THOUGHT_TOKENS + MAX_ANSWER_TOKENS
         } else {
-            MAX_ANSWER_TOKENS
+            MAX_ANSWER_TOKENS + 16
         };
 
         for _ in 0..max_total_steps {
@@ -1088,8 +1097,9 @@ impl SummarizerEngine {
                 return Err(CANCELLED_ERR.to_string());
             }
 
-            // Om tankebudgeten slår i taket: tvinga in `\n<channel|>` direkt i KV-cachen utan att kasta tankearbetet!
-            if in_thought && thinking_tokens >= MAX_THOUGHT_TOKENS && !forced_close_seq.is_empty() {
+            // Om tankebudgeten nås (eller direkt i snabbläge om modellen ändå öppnar `<|channel>thought`):
+            // injicera `\n<channel|>` i KV-cachen så modellen omedelbart börjar skriva svaret!
+            if in_thought && thinking_tokens >= thought_budget && !forced_close_seq.is_empty() {
                 step_batch.clear();
                 for (i, &tok) in forced_close_seq.iter().enumerate() {
                     let want = i + 1 == forced_close_seq.len();
@@ -1105,16 +1115,18 @@ impl SummarizerEngine {
             }
 
             let next_token = sampler.sample(ctx, logits_idx);
-            if vocab.is_eog(next_token) {
+            if vocab.is_eog(next_token) || Some(next_token) == turn_end_tok {
                 break;
             }
 
-            if in_thought {
+            if Some(next_token) == channel_open_tok {
+                in_thought = true;
+            } else if in_thought {
                 if Some(next_token) == channel_end_tok {
                     in_thought = false;
                 } else {
                     thinking_tokens += 1;
-                    if last_ui_emit.elapsed() >= Duration::from_millis(80) {
+                    if thorough && last_ui_emit.elapsed() >= Duration::from_millis(80) {
                         last_ui_emit = Instant::now();
                         let secs = gen_start.elapsed().as_secs_f32().max(0.001);
                         let tps = (thinking_tokens as f32) / secs;
@@ -1137,8 +1149,7 @@ impl SummarizerEngine {
                         });
                     }
                 }
-            } else {
-                // Stoppa om modellen skulle nå `<turn|>` utan att is_eog triggas
+            } else if Some(next_token) != channel_end_tok {
                 answer_tokens.push(next_token);
 
                 if answer_tokens.len() >= MAX_ANSWER_TOKENS {
@@ -1324,7 +1335,17 @@ mod tests {
             &p_actions[..end2],
             "Systemprompt, möteskontext och hela transkriberingen måste vara identiska i prefixet för varm KV-cache!"
         );
-        assert!(p_notes.ends_with("<|turn>model\n<|channel>thought\n<channel|>"));
+        assert!(p_notes.ends_with("<|turn>model\n"));
+        assert!(!p_notes.contains("<|think|>"));
+
+        let mut thorough_req = sample_req(
+            "meeting-notes",
+            "Minnesanteckning",
+            &format!("{COMMON_PREAMBLE}\n\nSkapa en kronologisk minnesanteckning."),
+        );
+        thorough_req.thorough = true;
+        let p_thorough = build_kv_friendly_prompt(&thorough_req, false);
+        assert!(p_thorough.starts_with("<bos><|turn>system\n<|think|>"));
     }
 
     #[test]
@@ -1341,5 +1362,106 @@ mod tests {
         let chunks = split_into_chunks(&long_text, 300, 3.5, 30);
         assert!(chunks.len() >= 4);
         assert!(chunks[0].ends_with('.'));
+    }
+
+    #[test]
+    #[ignore]
+    fn real_gemma4_end_to_end_smoke_test() {
+        let gguf = std::env::var("LOKI_SMOKE_GGUF").unwrap_or_else(|_| {
+            "/Users/patriksvensk/Library/Application Support/com.loki.app/models/google_gemma-4-E4B-it-Q4_K_M.gguf".to_string()
+        });
+        let p = Path::new(&gguf);
+        assert!(p.exists(), "GGUF saknas på {}", p.display());
+
+        println!("[SMOKE] Laddar SummarizerEngine från {}...", p.display());
+        let mut eng = SummarizerEngine::load(&MODEL_E4B, p).expect("SummarizerEngine::load");
+        println!(
+            "[SMOKE] Modell laddad! current_n_ctx={}, safe_ceiling={}",
+            eng.current_n_ctx, eng.safe_ceiling
+        );
+
+        // Bygg ett realistiskt svenskt mötesunderlag på ~7 150 tokens
+        let turn_block = "\
+Anna Lindqvist: Hej alla, kul att ni kunde koppla upp! Hörs mikrofonen bra? Ja vad fint. Då kör vi igång veckans styrgruppsmöte för e-tjänsteplattformen.\n\
+Erik Sjöberg: Vi har testat den nya inloggningen via Freja och BankID i testmiljön under veckan. Svarstiden ligger på 180 millisekunder och inga avbrott har noterats.\n\
+Maria Holm: Vad gäller informationssäkerhetsklassningen så landade juristen och CISO i att personuppgifterna måste gallras automatiskt efter 90 dagar. Vi behöver fatta beslut om det idag.\n\
+Anna Lindqvist: Bra, då beslutar vi att införa automatisk gallring efter 90 dagar i produktionsmiljön senast den 15 december. Erik, tar du ansvar för att lägga in gallringsjobbet i sprint 14?\n\
+Erik Sjöberg: Absolut, jag lägger in det i sprint 14 och återkopplar på fredag.\n\n";
+        let mut long_transcript = String::new();
+        while eng.count_tokens(&long_transcript) < 7150 {
+            long_transcript.push_str(turn_block);
+        }
+        let tok_count = eng.count_tokens(&long_transcript);
+        println!("[SMOKE] Transkript skapat: {} exakta Gemma 4-tokens", tok_count);
+
+        let cancel = AtomicBool::new(false);
+        let mut req1 = sample_req(
+            "meeting-notes",
+            "Minnesanteckning",
+            &format!("{COMMON_PREAMBLE}\n\nSkapa en kort och tydlig minnesanteckning med Beslut och Åtgärder."),
+        );
+        req1.transcript = long_transcript.clone();
+
+        let res1 = eng
+            .run_summarize(
+                &req1,
+                &cancel,
+                |prog| {
+                    if prog.phase == "prefill" {
+                        println!(
+                            "[SMOKE-1] {} ({}% / prompt={})",
+                            prog.label, prog.prefill_percent, prog.prompt_tokens
+                        );
+                    }
+                },
+                |_chunk| {},
+            )
+            .expect("run_summarize pass 1");
+
+        println!(
+            "[SMOKE-1] KLAR på {} ms ({:.1} tok/s, kv_reused={}, gen_tokens={}):\n---\n{}\n---",
+            res1.duration_ms, res1.tokens_per_sec, res1.kv_reused_tokens, res1.generated_tokens, res1.markdown
+        );
+        assert!(!res1.markdown.trim().is_empty(), "Pass 1 gav tomt svar!");
+        assert!(
+            !res1.markdown.contains("Analys av transkriptionen"),
+            "Tankekanal läckte ut i svaret: {}",
+            res1.markdown
+        );
+
+        // Pass 2: Byt mall till Åtgärdspunkter på exakt samma 7 150-tokens-möte -> verifiera varm KV-cache!
+        let mut req2 = sample_req(
+            "action-items",
+            "Åtgärdspunkter",
+            &format!("{COMMON_PREAMBLE}\n\nLista enbart konkreta åtgärdspunkter med ansvarig och deadline."),
+        );
+        req2.transcript = long_transcript;
+
+        let res2 = eng
+            .run_summarize(
+                &req2,
+                &cancel,
+                |prog| {
+                    if prog.phase == "prefill" {
+                        println!(
+                            "[SMOKE-2] {} (kv_reused={})",
+                            prog.label, prog.kv_reused_tokens
+                        );
+                    }
+                },
+                |_chunk| {},
+            )
+            .expect("run_summarize pass 2 (warm KV)");
+
+        println!(
+            "[SMOKE-2] KLAR på {} ms ({:.1} tok/s, kv_reused={}, gen_tokens={}):\n---\n{}\n---",
+            res2.duration_ms, res2.tokens_per_sec, res2.kv_reused_tokens, res2.generated_tokens, res2.markdown
+        );
+        assert!(!res2.markdown.trim().is_empty(), "Pass 2 gav tomt svar!");
+        assert!(
+            res2.kv_reused_tokens > 7000,
+            "Förväntade återanvändning av >7000 tokens i KV-cachen, fick {}",
+            res2.kv_reused_tokens
+        );
     }
 }

@@ -5,7 +5,7 @@ mod transcript;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -17,9 +17,33 @@ use summarizer::{
 use tauri::{AppHandle, Emitter, Manager};
 
 static ENGINE: Mutex<Option<SummarizerEngine>> = Mutex::new(None);
+/// Låsfri spegling av vilken modell som är inladdad i `ENGINE` (`0 = ingen`, `1 = e2b`, `2 = e4b`).
+/// Förhindrar all re-entrant låsning och UI-blockering när `build_models_overview` anropas under körning!
+const SLOT_NONE: u8 = 0;
+const SLOT_E2B: u8 = 1;
+const SLOT_E4B: u8 = 2;
+static LOADED_MODEL_SLOT: AtomicU8 = AtomicU8::new(SLOT_NONE);
+
 static SUMMARIZE_CANCEL: AtomicBool = AtomicBool::new(false);
 static DOWNLOAD_CANCEL: AtomicBool = AtomicBool::new(false);
 static STATE_LOCK: Mutex<()> = Mutex::new(());
+
+fn sync_loaded_slot(guard: &Option<SummarizerEngine>) {
+    let slot = match guard.as_ref().map(|e| e.model_id.as_str()) {
+        Some("e2b") => SLOT_E2B,
+        Some("e4b") => SLOT_E4B,
+        _ => SLOT_NONE,
+    };
+    LOADED_MODEL_SLOT.store(slot, Ordering::SeqCst);
+}
+
+fn loaded_model_id_lockfree() -> Option<String> {
+    match LOADED_MODEL_SLOT.load(Ordering::SeqCst) {
+        SLOT_E2B => Some("e2b".to_string()),
+        SLOT_E4B => Some("e4b".to_string()),
+        _ => None,
+    }
+}
 
 // ── Modellstatus & Nedladdningsstrukturer ────────────────────────────────────
 
@@ -201,6 +225,12 @@ struct ResolvedModelPath {
 /// 3. Systerappen Maskeras modellmapp (`com.patriksvensk.maskera/models/judge` eller `models`)
 ///    -> ger 0 GB dubbelnedladdning om Gemma 4 E2B redan installerats i Maskera!
 fn resolve_model_file(app: &AppHandle, spec: &ModelSpec) -> Option<ResolvedModelPath> {
+    let legacy_alt = match spec.id {
+        "e4b" => Some("google_gemma-4-E4B-it-Q4_K_M.gguf"),
+        "e2b" => Some("google_gemma-4-E2B-it-Q4_K_M.gguf"),
+        _ => None,
+    };
+
     if let Ok(ldir) = loki_models_dir(app) {
         let p = ldir.join(spec.filename);
         if let Some(bytes) = is_valid_gguf_for_spec(&p, spec) {
@@ -209,6 +239,16 @@ fn resolve_model_file(app: &AppHandle, spec: &ModelSpec) -> Option<ResolvedModel
                 bytes,
                 source: "loki",
             });
+        }
+        if let Some(alt_name) = legacy_alt {
+            let alt_p = ldir.join(alt_name);
+            if let Some(bytes) = is_valid_gguf_for_spec(&alt_p, spec) {
+                return Some(ResolvedModelPath {
+                    path: alt_p,
+                    bytes,
+                    source: "loki",
+                });
+            }
         }
     }
 
@@ -263,10 +303,7 @@ fn resolve_model_file(app: &AppHandle, spec: &ModelSpec) -> Option<ResolvedModel
 }
 
 fn build_models_overview(app: &AppHandle) -> ModelsOverview {
-    let loaded_id = ENGINE
-        .lock()
-        .ok()
-        .and_then(|g| g.as_ref().map(|e| e.model_id.clone()));
+    let loaded_id = loaded_model_id_lockfree();
 
     let state = {
         let _g = STATE_LOCK.lock().ok();
@@ -378,6 +415,7 @@ async fn select_active_model(model_id: String, app: AppHandle) -> Result<ModelsO
             if !already_loaded {
                 // Släpp först eventuell annan modell ur RAM innan den nya mmap-laddas
                 *guard = None;
+                sync_loaded_slot(&guard);
                 let _ = app_c.emit(
                     "model_download_progress",
                     ModelDownloadProgress {
@@ -390,6 +428,7 @@ async fn select_active_model(model_id: String, app: AppHandle) -> Result<ModelsO
                 );
                 let eng = SummarizerEngine::load(spec, &resolved.path)?;
                 *guard = Some(eng);
+                sync_loaded_slot(&guard);
             }
             Ok(())
         })
@@ -585,6 +624,7 @@ async fn delete_model(model_id: String, app: AppHandle) -> Result<ModelsOverview
             .map_err(|e| format!("Låsfel vid avinstallation av modell: {e}"))?;
         if guard.as_ref().map(|e| e.model_id == spec.id).unwrap_or(false) {
             *guard = None;
+            sync_loaded_slot(&guard);
         }
     }
 
@@ -680,8 +720,12 @@ fn ensure_engine_for_model(
     app: &AppHandle,
     requested_model_id: Option<&str>,
 ) -> Result<(), String> {
-    let overview = build_models_overview(app);
-    let target_id = requested_model_id.unwrap_or(&overview.active_model_id);
+    // OBS: Anropa ALDRIG något som låser `ENGINE` här eftersom `guard` redan håller `ENGINE.lock()`!
+    let saved_active_id = {
+        let _g = STATE_LOCK.lock().ok();
+        read_state_unlocked(app).active_model_id
+    };
+    let target_id = requested_model_id.unwrap_or(saved_active_id.as_str());
     let spec = get_model_spec(target_id).unwrap_or(&MODEL_E2B);
 
     let already_loaded = guard
@@ -705,13 +749,19 @@ fn ensure_engine_for_model(
                 .to_string()
         })?;
 
-    let load_spec = if resolved.path.to_string_lossy().contains("E4B") {
+    let load_spec = if resolved
+        .path
+        .to_string_lossy()
+        .to_ascii_uppercase()
+        .contains("E4B")
+    {
         &MODEL_E4B
     } else {
         &MODEL_E2B
     };
 
     *guard = None;
+    sync_loaded_slot(guard);
     let _ = app.emit(
         "summarize_progress",
         summarizer::SummarizeProgressPayload {
@@ -730,6 +780,7 @@ fn ensure_engine_for_model(
 
     let eng = SummarizerEngine::load(load_spec, &resolved.path)?;
     *guard = Some(eng);
+    sync_loaded_slot(guard);
     Ok(())
 }
 
@@ -747,6 +798,23 @@ async fn summarize_meeting(
     ));
 
     tauri::async_runtime::spawn_blocking(move || -> Result<SummarizeResult, String> {
+        if loaded_model_id_lockfree().is_none() {
+            let _ = app.emit(
+                "summarize_progress",
+                summarizer::SummarizeProgressPayload {
+                    phase: "loading_model".to_string(),
+                    label: "Laddar in språkmodellen i arbetsminnet…".to_string(),
+                    prefill_percent: 0,
+                    kv_reused_tokens: 0,
+                    prompt_tokens: 0,
+                    thinking_tokens: 0,
+                    generated_tokens: 0,
+                    tokens_per_sec: 0.0,
+                    chunk_current: None,
+                    chunk_total: None,
+                },
+            );
+        }
         logger::log_info("Väntar på ENGINE-lås…");
         let mut guard = ENGINE
             .lock()
@@ -925,7 +993,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            if let Ok(dir) = app.path().app_data_dir() {
+            // Spara loki.log i exakt samma OS-loggkatalog som Loki 2.9 (`%LOCALAPPDATA%\com.loki.app\logs\` på Windows)
+            let log_dir = app
+                .path()
+                .app_log_dir()
+                .or_else(|_| app.path().app_data_dir());
+            if let Ok(dir) = log_dir {
                 logger::init_logger(dir);
                 logger::log_info(&format!(
                     "Loki {} startad ({}-{}, accelerator={}, RAM={:.1} GB)",
@@ -936,6 +1009,30 @@ pub fn run() {
                     summarizer::detect_total_ram_gb()
                 ));
             }
+
+            // Värm upp språkmodellen i bakgrunden direkt vid uppstart om den redan finns på disk (t.ex. via Maskera!)
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let ov = build_models_overview(&handle);
+                if ov.any_installed {
+                    logger::log_info(&format!(
+                        "Förladdar aktiv språkmodell ({}) i bakgrunden…",
+                        ov.active_model_id
+                    ));
+                    if let Ok(mut guard) = ENGINE.lock() {
+                        if let Err(e) =
+                            ensure_engine_for_model(&mut guard, &handle, Some(&ov.active_model_id))
+                        {
+                            logger::log_warn(&format!("Bakgrundsförladdning hoppades över: {e}"));
+                        } else {
+                            let _ = handle.emit("models_status_changed", build_models_overview(&handle));
+                        }
+                    }
+                } else {
+                    logger::log_info("Ingen språkmodell installerad vid uppstart.");
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -963,4 +1060,18 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Loki application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loaded_slot_is_lockfree_while_engine_mutex_is_held() {
+        let guard = ENGINE.lock().expect("lock ENGINE");
+        sync_loaded_slot(&guard);
+        // Måste kunna läsas utan att ta ENGINE.lock() på samma tråd (förhindrar re-entrant deadlock!)
+        assert_eq!(loaded_model_id_lockfree(), None);
+        drop(guard);
+    }
 }

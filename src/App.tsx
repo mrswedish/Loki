@@ -254,9 +254,11 @@ export default function App() {
   }, [theme]);
 
   useEffect(() => {
+    let disposed = false;
     let unlistenDl: (() => void) | undefined;
     let unlistenProg: (() => void) | undefined;
     let unlistenChunk: (() => void) | undefined;
+    let unlistenModels: (() => void) | undefined;
 
     async function bootstrap() {
       try {
@@ -264,6 +266,7 @@ export default function App() {
           invoke<ModelsOverview>("get_models_status"),
           invoke<LocalAppState>("load_local_state"),
         ]);
+        if (disposed) return;
         setModelsOverview(overview);
         setCustomTemplates(
           (localState.customTemplates ?? []).map((t) => ({
@@ -275,37 +278,68 @@ export default function App() {
         setSavedContexts(localState.savedContexts ?? []);
         setHistory(localState.history ?? []);
       } catch (err) {
-        setErrorMessage(`Kunde inte läsa lokalt programtillstånd: ${String(err)}`);
+        if (!disposed) {
+          setErrorMessage(`Kunde inte läsa lokalt programtillstånd: ${String(err)}`);
+        }
       }
 
-      unlistenDl = await listen<ModelDownloadProgress>(
+      const dlFn = await listen<ModelDownloadProgress>(
         "model_download_progress",
         (ev) => {
           setDownloadProgress(ev.payload);
         }
       );
+      if (disposed) {
+        dlFn();
+        return;
+      }
+      unlistenDl = dlFn;
 
-      unlistenProg = await listen<SummarizeProgressPayload>(
+      const progFn = await listen<SummarizeProgressPayload>(
         "summarize_progress",
         (ev) => {
           setRunProgress(ev.payload);
         }
       );
+      if (disposed) {
+        progFn();
+        return;
+      }
+      unlistenProg = progFn;
 
-      unlistenChunk = await listen<SummarizeChunkPayload>(
+      const chunkFn = await listen<SummarizeChunkPayload>(
         "summarize_chunk",
         (ev) => {
           setResultMarkdown(ev.payload.fullText);
         }
       );
+      if (disposed) {
+        chunkFn();
+        return;
+      }
+      unlistenChunk = chunkFn;
+
+      const modelsFn = await listen<ModelsOverview>(
+        "models_status_changed",
+        (ev) => {
+          setModelsOverview(ev.payload);
+        }
+      );
+      if (disposed) {
+        modelsFn();
+        return;
+      }
+      unlistenModels = modelsFn;
     }
 
     void bootstrap();
 
     return () => {
+      disposed = true;
       if (unlistenDl) unlistenDl();
       if (unlistenProg) unlistenProg();
       if (unlistenChunk) unlistenChunk();
+      if (unlistenModels) unlistenModels();
     };
   }, []);
 
@@ -1075,7 +1109,9 @@ export default function App() {
             <Cpu size={14} aria-hidden="true" />
             <span>
               {modelsOverview?.anyInstalled && activeModelEntry
-                ? `Modell: ${activeModelEntry.shortLabel}`
+                ? `Modell: ${activeModelEntry.shortLabel}${
+                    activeModelEntry.loaded ? " (redo)" : ""
+                  }`
                 : "Välj / Hämta språkmodell"}
             </span>
           </button>

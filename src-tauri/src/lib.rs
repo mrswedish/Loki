@@ -32,6 +32,11 @@ static DOWNLOAD_CANCEL: AtomicBool = AtomicBool::new(false);
 static APP_EXITING: AtomicBool = AtomicBool::new(false);
 static STATE_LOCK: Mutex<()> = Mutex::new(());
 
+#[cfg(target_os = "windows")]
+static WINDOWS_SHUTDOWN_STARTED: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "windows")]
+static WINDOWS_ENGINE_DROP_DONE: AtomicBool = AtomicBool::new(false);
+
 /// Avbryter eventuell pågående bakgrundsförvärmning omedelbart så att användarkommandon
 /// (`Skapa`, modellbyte, avslut m.m.) får `ENGINE.lock()` direkt utan väntetid.
 fn abort_prewarm() {
@@ -40,9 +45,10 @@ fn abort_prewarm() {
 }
 
 /// Frigör alltid `SummarizerEngine` (`LlamaContext` först, därefter `LlamaModel`) explicit INNAN
-/// `tao::EventLoop` anropar `std::process::exit(0)`. Annars ligger Metal residency sets (`rsets`)
-/// respektive Vulkan-resurser kvar i `static ENGINE` när C++ globala destruktorer körs i
-/// `__cxa_finalize_ranges`, vilket utlöser `GGML_ASSERT([rsets->data count] == 0)` -> `SIGABRT`!
+/// `tao::EventLoop` anropar `std::process::exit(0)` på macOS/Linux. Annars ligger Metal residency sets
+/// (`rsets`) kvar i `static ENGINE` när C++ globala destruktorer körs i `__cxa_finalize_ranges`,
+/// vilket utlöser `GGML_ASSERT([rsets->data count] == 0)` -> `SIGABRT`!
+#[cfg(not(target_os = "windows"))]
 fn shutdown_engine() {
     APP_EXITING.store(true, Ordering::SeqCst);
     abort_prewarm();
@@ -55,6 +61,79 @@ fn shutdown_engine() {
         sync_loaded_slot(&guard);
         logger::log_info("LLM-motor frigjord rent.");
     }
+}
+
+/// På Windows orsakar `std::process::exit(0)` (`ExitProcess`) en klassisk Vulkan-deadlock i C++ globala
+/// destruktorn `vk_device_struct::~vk_device_struct()` eftersom Windows-kärnan först dödar drivrutinens
+/// bakgrundstrådar (`nvoglv64.dll` / `amdvlk64.dll` / `igvk64.dll`) innan `vkDestroyDevice` anropas.
+/// Dessutom får huvudtråden (Win32 message loop) aldrig blockera på `ENGINE.lock()` i `CloseRequested`.
+/// Lösning: avbryt pågående arbete låsfritt direkt, frigör `ENGINE` på en hjälptråd medan WebView2 stängs,
+/// och avsluta sedan processen omedelbart via `TerminateProcess(GetCurrentProcess(), 0)` i `RunEvent::Exit`!
+#[cfg(target_os = "windows")]
+fn terminate_current_process_windows(exit_code: u32) -> ! {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetCurrentProcess() -> *mut std::ffi::c_void;
+        fn TerminateProcess(hProcess: *mut std::ffi::c_void, uExitCode: u32) -> i32;
+    }
+    unsafe {
+        let _ = TerminateProcess(GetCurrentProcess(), exit_code);
+    }
+    std::process::abort();
+}
+
+#[cfg(target_os = "windows")]
+fn begin_windows_shutdown() {
+    APP_EXITING.store(true, Ordering::SeqCst);
+    abort_prewarm();
+    SUMMARIZE_CANCEL.store(true, Ordering::SeqCst);
+    DOWNLOAD_CANCEL.store(true, Ordering::SeqCst);
+
+    if WINDOWS_SHUTDOWN_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    // Snabbväg om ingen tråd håller ENGINE just nu
+    if let Ok(mut guard) = ENGINE.try_lock() {
+        if guard.is_some() {
+            logger::log_info("Frigör LLM-motor inför Windows-avslut…");
+            *guard = None;
+            sync_loaded_slot(&guard);
+        }
+        WINDOWS_ENGINE_DROP_DONE.store(true, Ordering::SeqCst);
+    } else {
+        let _ = std::thread::Builder::new()
+            .name("loki-win-engine-drop".to_string())
+            .spawn(|| {
+                let mut guard = ENGINE.lock().unwrap_or_else(|e| e.into_inner());
+                if guard.is_some() {
+                    logger::log_info("Frigör LLM-motor på bakgrundstråd inför Windows-avslut…");
+                    *guard = None;
+                    sync_loaded_slot(&guard);
+                }
+                WINDOWS_ENGINE_DROP_DONE.store(true, Ordering::SeqCst);
+            });
+    }
+
+    // Hård säkerhetsvakt: om fönster-/WebView2-nedstängning mot förmodan hänger sig avslutas Loki garanterat inom 1,2 s
+    let _ = std::thread::Builder::new()
+        .name("loki-win-exit-watchdog".to_string())
+        .spawn(|| {
+            std::thread::sleep(Duration::from_millis(1200));
+            logger::log_info("Avslutar Loki via Windows-säkerhetsvakt.");
+            terminate_current_process_windows(0);
+        });
+}
+
+#[cfg(target_os = "windows")]
+fn finish_windows_exit() -> ! {
+    begin_windows_shutdown();
+    let deadline = Instant::now() + Duration::from_millis(300);
+    while !WINDOWS_ENGINE_DROP_DONE.load(Ordering::SeqCst) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(15));
+    }
+    logger::log_info("Avslutar Loki rent (Windows).");
+    terminate_current_process_windows(0);
 }
 
 fn sync_loaded_slot(guard: &Option<SummarizerEngine>) {
@@ -427,6 +506,87 @@ async fn select_active_model(model_id: String, app: AppHandle) -> Result<ModelsO
     let spec = get_model_spec(&model_id)
         .ok_or_else(|| format!("Okänd modellidentifierare: {model_id}"))?;
 
+    let resolved = resolve_model_file(&app, spec).ok_or_else(|| {
+        format!(
+            "Modellfilen för {} hittades inte på disk. Hämta eller importera modellen först.",
+            spec.label
+        )
+    })?;
+
+    abort_prewarm();
+    SUMMARIZE_CANCEL.store(true, Ordering::SeqCst);
+
+    let _ = app.emit(
+        "model_download_progress",
+        ModelDownloadProgress {
+            model_id: spec.id.to_string(),
+            phase: "loading".to_string(),
+            label: format!("Förbereder byte till {}…", spec.short_label),
+            downloaded_bytes: resolved.bytes,
+            total_bytes: resolved.bytes,
+        },
+    );
+
+    let app_c = app.clone();
+    let load_result = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        let mut guard = ENGINE
+            .lock()
+            .map_err(|e| format!("Låsfel för LLM-motor: {e}"))?;
+        let already_loaded = guard
+            .as_ref()
+            .map(|e| e.model_id == spec.id)
+            .unwrap_or(false);
+        if !already_loaded {
+            if let Some(prev) = guard.as_ref() {
+                logger::log_info(&format!(
+                    "Byter aktiv språkmodell '{}' -> '{}': frigör gammal modell ur minnet…",
+                    prev.model_id, spec.id
+                ));
+            }
+            // Släpp först eventuell annan modell ur RAM/VRAM innan den nya laddas in
+            let t_unload = Instant::now();
+            *guard = None;
+            sync_loaded_slot(&guard);
+            logger::log_info(&format!(
+                "Föregående modell frigjord på {} ms. Laddar in '{}'…",
+                t_unload.elapsed().as_millis(),
+                spec.id
+            ));
+            let _ = app_c.emit("models_status_changed", build_models_overview(&app_c));
+            let _ = app_c.emit(
+                "model_download_progress",
+                ModelDownloadProgress {
+                    model_id: spec.id.to_string(),
+                    phase: "loading".to_string(),
+                    label: format!("Laddar in {} i arbetsminnet…", spec.short_label),
+                    downloaded_bytes: resolved.bytes,
+                    total_bytes: resolved.bytes,
+                },
+            );
+            match SummarizerEngine::load(spec, &resolved.path) {
+                Ok(eng) => {
+                    *guard = Some(eng);
+                    sync_loaded_slot(&guard);
+                }
+                Err(load_err) => {
+                    logger::log_error(&format!(
+                        "Modellbyte till '{}' misslyckades: {load_err}",
+                        spec.id
+                    ));
+                    drop(guard);
+                    let _ = app_c.emit("models_status_changed", build_models_overview(&app_c));
+                    return Err(load_err);
+                }
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("Trådfel vid modellbyte: {e}"))?;
+
+    load_result?;
+
+    // Spara ny aktiv modell i loki_state.json först när den faktiskt är inladdad och verifierad!
     {
         let _g = STATE_LOCK
             .lock()
@@ -436,42 +596,9 @@ async fn select_active_model(model_id: String, app: AppHandle) -> Result<ModelsO
         write_state_unlocked(&app, &st)?;
     }
 
-    if let Some(resolved) = resolve_model_file(&app, spec) {
-        abort_prewarm();
-        let app_c = app.clone();
-        tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-            let mut guard = ENGINE
-                .lock()
-                .map_err(|e| format!("Låsfel för LLM-motor: {e}"))?;
-            let already_loaded = guard
-                .as_ref()
-                .map(|e| e.model_id == spec.id)
-                .unwrap_or(false);
-            if !already_loaded {
-                // Släpp först eventuell annan modell ur RAM innan den nya mmap-laddas
-                *guard = None;
-                sync_loaded_slot(&guard);
-                let _ = app_c.emit(
-                    "model_download_progress",
-                    ModelDownloadProgress {
-                        model_id: spec.id.to_string(),
-                        phase: "loading".to_string(),
-                        label: format!("Laddar in {} i arbetsminnet…", spec.short_label),
-                        downloaded_bytes: resolved.bytes,
-                        total_bytes: resolved.bytes,
-                    },
-                );
-                let eng = SummarizerEngine::load(spec, &resolved.path)?;
-                *guard = Some(eng);
-                sync_loaded_slot(&guard);
-            }
-            Ok(())
-        })
-        .await
-        .map_err(|e| format!("Trådfel vid modellbyte: {e}"))??;
-    }
-
-    Ok(build_models_overview(&app))
+    let overview = build_models_overview(&app);
+    let _ = app.emit("models_status_changed", overview.clone());
+    Ok(overview)
 }
 
 #[tauri::command]
@@ -1117,7 +1244,15 @@ pub fn run() {
                 event,
                 tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
             ) {
-                shutdown_engine();
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = _window.hide();
+                    begin_windows_shutdown();
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    shutdown_engine();
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -1146,13 +1281,20 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building Loki application")
-        .run(|_app_handle, event| {
-            if matches!(
-                event,
-                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
-            ) {
+        .run(|_app_handle, event| match event {
+            tauri::RunEvent::ExitRequested { .. } => {
+                #[cfg(target_os = "windows")]
+                begin_windows_shutdown();
+                #[cfg(not(target_os = "windows"))]
                 shutdown_engine();
             }
+            tauri::RunEvent::Exit => {
+                #[cfg(target_os = "windows")]
+                finish_windows_exit();
+                #[cfg(not(target_os = "windows"))]
+                shutdown_engine();
+            }
+            _ => {}
         });
 }
 

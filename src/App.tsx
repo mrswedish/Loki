@@ -431,6 +431,15 @@ export default function App() {
 
   async function handleSelectModel(modelId: string) {
     setErrorMessage(null);
+    const targetEntry = modelsOverview?.models.find((m) => m.id === modelId);
+    setDownloadingModelId(modelId);
+    setDownloadProgress({
+      modelId,
+      phase: "loading",
+      label: `Byter till ${targetEntry?.shortLabel ?? modelId} och laddar in i minnet…`,
+      downloadedBytes: targetEntry?.fileSizeBytes ?? 0,
+      totalBytes: targetEntry?.fileSizeBytes ?? 0,
+    });
     try {
       const updated = await invoke<ModelsOverview>("select_active_model", {
         modelId,
@@ -438,11 +447,18 @@ export default function App() {
       setModelsOverview(updated);
       const picked = updated.models.find((m) => m.id === modelId);
       if (picked) {
-        notifyStatus(`Bytte aktiv modell till ${picked.shortLabel}.`);
+        notifyStatus(`Bytte aktiv modell till ${picked.shortLabel} (inladdad i minnet).`);
       }
     } catch (err) {
       setErrorMessage(`Kunde inte aktivera modellen: ${String(err)}`);
+      try {
+        const refreshed = await invoke<ModelsOverview>("get_models_status");
+        setModelsOverview(refreshed);
+      } catch {
+        // Ignorera om statusfråga misslyckas
+      }
     } finally {
+      setDownloadingModelId(null);
       setDownloadProgress(null);
     }
   }
@@ -1124,7 +1140,9 @@ export default function App() {
           <button
             type="button"
             className={`header-pill-btn ${
-              modelsOverview?.anyInstalled ? "model-ready" : "model-missing"
+              modelsOverview?.anyInstalled && activeModelEntry?.loaded
+                ? "model-ready"
+                : "model-missing"
             }`}
             onClick={() => modelDialogRef.current?.showModal()}
           >
@@ -1132,7 +1150,11 @@ export default function App() {
             <span>
               {modelsOverview?.anyInstalled && activeModelEntry
                 ? `Modell: ${activeModelEntry.shortLabel}${
-                    activeModelEntry.loaded ? " (redo)" : ""
+                    downloadingModelId
+                      ? " (laddar…)"
+                      : activeModelEntry.loaded
+                        ? " (redo)"
+                        : " (ej i minnet)"
                   }`
                 : "Välj / Hämta språkmodell"}
             </span>
@@ -1961,6 +1983,19 @@ export default function App() {
             </p>
           )}
 
+          {errorMessage && (
+            <div className="error-banner" role="alert" style={{ margin: 0 }}>
+              <span>{errorMessage}</span>
+              <button
+                type="button"
+                className="tb-btn"
+                onClick={() => setErrorMessage(null)}
+              >
+                Stäng
+              </button>
+            </div>
+          )}
+
           {downloadingModelId && downloadProgress && (
             <div className="progress-card">
               <div className="progress-card-row">
@@ -1986,6 +2021,9 @@ export default function App() {
 
           {modelsOverview?.models.map((m) => {
             const isSelected = modelsOverview.activeModelId === m.id;
+            const isSelectedAndLoaded = isSelected && m.loaded;
+            const isSwitchingThis =
+              downloadingModelId === m.id && downloadProgress?.phase === "loading";
             const lowRamForModel =
               modelsOverview.totalRamGb > 0 &&
               modelsOverview.totalRamGb + 0.5 < m.recommendedMinRamGb;
@@ -2003,6 +2041,11 @@ export default function App() {
                         : m.source === "portable"
                           ? "Portabel modell"
                           : "Installerad"}
+                      {m.loaded
+                        ? " · Inladdad i minnet"
+                        : isSelected
+                          ? " · Ej i minnet"
+                          : ""}
                     </span>
                   ) : (
                     <span className="field-hint">Ej nedladdad</span>
@@ -2028,11 +2071,21 @@ export default function App() {
                       <button
                         type="button"
                         className="tb-btn"
-                        aria-pressed={isSelected}
-                        disabled={Boolean(downloadingModelId)}
+                        aria-pressed={isSelectedAndLoaded}
+                        disabled={
+                          Boolean(downloadingModelId) ||
+                          isRunning ||
+                          isSelectedAndLoaded
+                        }
                         onClick={() => handleSelectModel(m.id)}
                       >
-                        {isSelected ? "Aktiv modell" : "Använd denna modell"}
+                        {isSwitchingThis
+                          ? "Laddar in i minnet…"
+                          : isSelectedAndLoaded
+                            ? "Aktiv & inladdad"
+                            : isSelected
+                              ? "Ladda in i minnet"
+                              : "Använd denna modell"}
                       </button>
                       {m.canDelete && (
                         <button

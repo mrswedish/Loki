@@ -25,14 +25,26 @@ const DEFAULT_MIN_CTX: u32 = 16_384;
 const HIGH_RAM_INIT_CTX: u32 = 36_864;
 /// Tak för enkelpass på ren CPU utan GPU-offload (undviker kvadratisk 30k-sirap på kontors-PC utan GPU).
 const CPU_SINGLE_PASS_MAX_CTX: u32 = 16_384;
-/// Batchstorlek vid prompt-inläsning på GPU (Metal/Vulkan) för maximal matrisgenomströmning.
+/// Batchstorlek vid prompt-inläsning på GPU:
+/// - macOS Metal (Unified Memory): 2048/2048 för maximal SIMD-matrisgenomströmning.
+/// - Windows Vulkan (WDDM): 512/512 ger hög beräkningsmättnad utan att någonsin passera Windows WDDM:s
+///   2,0-sekunders TDR-gräns (`vk::DeviceLostError`) på iGPU/mellanklasskort, och ger 4x snabbare avbrott vid modellbyte/avslut!
+#[cfg(target_os = "macos")]
 const GPU_PREFILL_BATCH: usize = 2048;
+#[cfg(target_os = "macos")]
 const GPU_PREFILL_UBATCH: u32 = 2048;
+#[cfg(not(target_os = "macos"))]
+const GPU_PREFILL_BATCH: usize = 512;
+#[cfg(not(target_os = "macos"))]
+const GPU_PREFILL_UBATCH: u32 = 512;
 /// Batchstorlek på ren CPU (responsivt avbrott och lägre cache-tryck).
 const CPU_PREFILL_BATCH: usize = 512;
 const CPU_PREFILL_UBATCH: u32 = 512;
-/// Stegstorlek vid tyst bakgrundsförvärmning på GPU (hög matrisgenomströmning men lämnar över låset snabbt vid klick på "Skapa").
+/// Stegstorlek vid tyst bakgrundsförvärmning på GPU (lämnar över låset snabbt vid klick på "Skapa" eller modellbyte).
+#[cfg(target_os = "macos")]
 const PREWARM_BATCH: usize = 1024;
+#[cfg(not(target_os = "macos"))]
+const PREWARM_BATCH: usize = 512;
 /// Reserverat utrymme för modellens svar i normalt respektive "Noggrannare"-läge.
 const RESPONSE_MARGIN_FAST: u32 = 4096;
 const RESPONSE_MARGIN_THOROUGH: u32 = 8192;
@@ -294,6 +306,14 @@ pub fn accelerator_label() -> &'static str {
 
 pub fn ensure_llama_backend() -> Result<&'static LlamaBackend, String> {
     let res = LLAMA_BACKEND.get_or_init(|| {
+        // Tillåt ggml-vulkan att automatiskt spill-allokera i delat systemminne (HostVisible) när
+        // dedikerat grafikkortsminne (VRAM) inte räcker till vid byte till större modell (E4B/12B).
+        // Måste sättas INNAN Vulkan-enheten skapas i LlamaBackend::init()!
+        #[cfg(feature = "vulkan")]
+        if std::env::var_os("GGML_VK_ALLOW_SYSMEM_FALLBACK").is_none() {
+            std::env::set_var("GGML_VK_ALLOW_SYSMEM_FALLBACK", "1");
+        }
+
         crate::logger::log_info(&format!(
             "Initierar llama.cpp-backend ({})…",
             accelerator_label()
@@ -577,7 +597,13 @@ pub struct SummarizerEngine {
 
 impl Drop for SummarizerEngine {
     fn drop(&mut self) {
+        let t_drop = Instant::now();
         self.ctx = None;
+        crate::logger::log_info(&format!(
+            "Inferenskontext frigjord för modell '{}' ({} ms); frigör modellvikter…",
+            self.model_id,
+            t_drop.elapsed().as_millis()
+        ));
     }
 }
 
@@ -611,9 +637,15 @@ impl SummarizerEngine {
 
         let try_load_and_ctx =
             |use_gpu: bool| -> Result<(Box<LlamaModel>, LlamaContext<'static>, u32, u32, bool, bool), String> {
-                let mut mparams = LlamaModelParams::default().with_use_mmap(true);
+                // På Windows Vulkan med GPU-offload läser vi in vikterna direkt i Vulkan-buffertar utan
+                // `MapViewOfFile` (`use_mmap=false`). Det undviker `VK_EXT_external_memory_host`-buggar
+                // på Intel/AMD-drivrutiner och släpper filhandtag/minne 100 % rent direkt vid modellbyte!
+                let use_mmap = !(use_gpu && cfg!(all(target_os = "windows", feature = "vulkan")));
+                let mut mparams = LlamaModelParams::default().with_use_mmap(use_mmap);
                 if use_gpu {
-                    crate::logger::log_info("Aktiverar GPU-offload (n_gpu_layers=999)");
+                    crate::logger::log_info(&format!(
+                        "Aktiverar GPU-offload (n_gpu_layers=999, use_mmap={use_mmap})"
+                    ));
                     mparams = mparams.with_n_gpu_layers(999);
                 } else {
                     mparams = mparams.with_n_gpu_layers(0);
@@ -626,7 +658,10 @@ impl SummarizerEngine {
 
                 let train_ctx = m.n_ctx_train().max(8192);
                 let ceiling = ram_ceiling.min(train_ctx).min(MAX_CTX);
-                let base_init = if use_gpu && total_ram_gb >= 22.0 {
+                // Förallokera endast det stora 36k-fönstret på macOS (Unified Memory där system-RAM = GPU-minne).
+                // På Windows/Vulkan kan PC:n ha 32 GB system-RAM men 4–8 GB VRAM — starta med 16k så modellbyte till
+                // E4B/12B alltid ryms smidigt, och väx dynamiskt via `ensure_context_capacity` vid långa möten!
+                let base_init = if cfg!(target_os = "macos") && use_gpu && total_ram_gb >= 22.0 {
                     HIGH_RAM_INIT_CTX
                 } else {
                     DEFAULT_MIN_CTX

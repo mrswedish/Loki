@@ -14,11 +14,13 @@ dist-ssr
 
 # Rust / Tauri build artifacts & local models
 src-tauri/target
+src-tauri/gen
 models/
 *.gguf
 *.part
 
 # Editor directories and files
+.claude/
 .vscode/*
 !.vscode/extensions.json
 .idea

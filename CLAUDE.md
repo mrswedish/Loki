@@ -28,6 +28,7 @@ Arkitekturen delar ramverk, designsystem och in-process `llama-cpp-2`-mönster m
 
 1. **Standard (`e2b`, 2,62 GB):** `unsloth/gemma-4-E2B-it-qat-GGUF` (`gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf`)
 2. **Fördjupad (`e4b`, 4,22 GB, valfri):** `unsloth/gemma-4-E4B-it-qat-GGUF` (`gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf`)
+3. **Maximal (`12b`, 6,72 GB, valfri):** `unsloth/gemma-4-12B-it-qat-GGUF` (`gemma-4-12B-it-qat-UD-Q4_K_XL.gguf`) — rekommenderas för datorer med mer än 16 GB RAM.
 
 Om användaren redan har laddat ner `gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf` i **Maskera** upptäcker Loki filen automatiskt utan ny nedladdning.
 

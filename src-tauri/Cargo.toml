@@ -1,6 +1,6 @@
 [package]
 name = "loki"
-version = "3.0.5"
+version = "3.0.6"
 description = "Loki — 100 % lokala mötesanteckningar och protokoll"
 authors = ["Patrik Svensk"]
 edition = "2021"

@@ -5,7 +5,7 @@ mod transcript;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -26,9 +26,18 @@ const SLOT_12B: u8 = 3;
 static LOADED_MODEL_SLOT: AtomicU8 = AtomicU8::new(SLOT_NONE);
 
 static SUMMARIZE_CANCEL: AtomicBool = AtomicBool::new(false);
+static PREWARM_CANCEL: AtomicBool = AtomicBool::new(false);
+static PREWARM_GEN: AtomicU64 = AtomicU64::new(0);
 static DOWNLOAD_CANCEL: AtomicBool = AtomicBool::new(false);
 static APP_EXITING: AtomicBool = AtomicBool::new(false);
 static STATE_LOCK: Mutex<()> = Mutex::new(());
+
+/// Avbryter eventuell pågående bakgrundsförvärmning omedelbart så att användarkommandon
+/// (`Skapa`, modellbyte, avslut m.m.) får `ENGINE.lock()` direkt utan väntetid.
+fn abort_prewarm() {
+    PREWARM_GEN.fetch_add(1, Ordering::SeqCst);
+    PREWARM_CANCEL.store(true, Ordering::SeqCst);
+}
 
 /// Frigör alltid `SummarizerEngine` (`LlamaContext` först, därefter `LlamaModel`) explicit INNAN
 /// `tao::EventLoop` anropar `std::process::exit(0)`. Annars ligger Metal residency sets (`rsets`)
@@ -36,6 +45,7 @@ static STATE_LOCK: Mutex<()> = Mutex::new(());
 /// `__cxa_finalize_ranges`, vilket utlöser `GGML_ASSERT([rsets->data count] == 0)` -> `SIGABRT`!
 fn shutdown_engine() {
     APP_EXITING.store(true, Ordering::SeqCst);
+    abort_prewarm();
     SUMMARIZE_CANCEL.store(true, Ordering::SeqCst);
     DOWNLOAD_CANCEL.store(true, Ordering::SeqCst);
     let mut guard = ENGINE.lock().unwrap_or_else(|e| e.into_inner());
@@ -427,6 +437,7 @@ async fn select_active_model(model_id: String, app: AppHandle) -> Result<ModelsO
     }
 
     if let Some(resolved) = resolve_model_file(&app, spec) {
+        abort_prewarm();
         let app_c = app.clone();
         tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
             let mut guard = ENGINE
@@ -642,6 +653,7 @@ async fn delete_model(model_id: String, app: AppHandle) -> Result<ModelsOverview
     let spec = get_model_spec(&model_id)
         .ok_or_else(|| format!("Okänd modellidentifierare: {model_id}"))?;
 
+    abort_prewarm();
     DOWNLOAD_CANCEL.store(true, Ordering::SeqCst);
 
     // Frigör alltid modellen ur RAM först så att operativsystemet släpper mmap-lås på Windows/macOS!
@@ -739,7 +751,48 @@ fn write_text_file(path: String, content: String) -> Result<(), String> {
 
 #[tauri::command]
 fn cancel_summarize() {
+    abort_prewarm();
     SUMMARIZE_CANCEL.store(true, Ordering::SeqCst);
+}
+
+#[tauri::command]
+async fn prewarm_transcript(transcript: String, thorough: bool) -> Result<usize, String> {
+    if APP_EXITING.load(Ordering::SeqCst)
+        || loaded_model_id_lockfree().is_none()
+        || transcript.trim().len() < 300
+    {
+        return Ok(0);
+    }
+
+    let my_gen = PREWARM_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    PREWARM_CANCEL.store(true, Ordering::SeqCst);
+
+    tauri::async_runtime::spawn_blocking(move || -> Result<usize, String> {
+        if PREWARM_GEN.load(Ordering::SeqCst) != my_gen || APP_EXITING.load(Ordering::SeqCst) {
+            return Ok(0);
+        }
+        let mut guard = match ENGINE.lock() {
+            Ok(g) => g,
+            Err(_) => return Ok(0),
+        };
+        if PREWARM_GEN.load(Ordering::SeqCst) != my_gen || APP_EXITING.load(Ordering::SeqCst) {
+            return Ok(0);
+        }
+        PREWARM_CANCEL.store(false, Ordering::SeqCst);
+        // Kontrollera generationen en gång till efter att PREWARM_CANCEL nollställts (stänger alla kapplöpningsfönster!)
+        if PREWARM_GEN.load(Ordering::SeqCst) != my_gen || APP_EXITING.load(Ordering::SeqCst) {
+            PREWARM_CANCEL.store(true, Ordering::SeqCst);
+            return Ok(0);
+        }
+
+        if let Some(engine) = guard.as_mut() {
+            engine.prewarm_transcript(&transcript, thorough, &PREWARM_CANCEL)
+        } else {
+            Ok(0)
+        }
+    })
+    .await
+    .map_err(|e| format!("Trådfel vid bakgrundsförvärmning: {e}"))?
 }
 
 fn ensure_engine_for_model(
@@ -805,6 +858,7 @@ async fn summarize_meeting(
     request: SummarizeRequest,
     app: AppHandle,
 ) -> Result<SummarizeResult, String> {
+    abort_prewarm();
     SUMMARIZE_CANCEL.store(false, Ordering::SeqCst);
 
     logger::log_info(&format!(
@@ -873,6 +927,7 @@ async fn adjust_meeting_result(
     model_id: Option<String>,
     app: AppHandle,
 ) -> Result<SummarizeResult, String> {
+    abort_prewarm();
     SUMMARIZE_CANCEL.store(false, Ordering::SeqCst);
 
     tauri::async_runtime::spawn_blocking(move || -> Result<SummarizeResult, String> {
@@ -1077,6 +1132,7 @@ pub fn run() {
             export_docx_file,
             write_text_file,
             summarize_meeting,
+            prewarm_transcript,
             adjust_meeting_result,
             cancel_summarize,
             load_local_state,

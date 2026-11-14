@@ -363,6 +363,23 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [transcript]);
 
+  // Förvärm mötestexten tyst i GPU:ns KV-cache medan användaren väljer mall/rubrik/sammanhang
+  useEffect(() => {
+    const trimmed = transcript.trim();
+    if (isRunning || trimmed.length < 300 || !modelsOverview?.loadedModelId) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void invoke("prewarm_transcript", {
+        transcript: trimmed,
+        thorough: thoroughMode,
+      }).catch(() => {
+        // Tyst bakgrundsoptimering
+      });
+    }, 1100);
+    return () => window.clearTimeout(timer);
+  }, [transcript, thoroughMode, isRunning, modelsOverview?.loadedModelId]);
+
   // Synka redigering i resultatdokumentet till aktuell historikpost
   async function persistHistoryMarkdownUpdate(updatedMd: string) {
     if (!currentHistoryId || !updatedMd.trim()) return;

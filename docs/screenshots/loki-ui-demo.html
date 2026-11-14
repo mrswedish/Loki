@@ -1,0 +1,989 @@
+<!doctype html>
+<html lang="sv">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- MANDATORY (MWG dark-mode): deklarera stöd för både ljust och mörkt tema direkt i <head> -->
+    <meta name="color-scheme" content="light dark" id="color-scheme-meta" />
+    <script>
+      (function () {
+        const meta = document.getElementById("color-scheme-meta");
+        if (!meta) return;
+        const params = new URLSearchParams(window.location.search);
+        const urlTheme = params.get("theme");
+        if (urlTheme === "light" || urlTheme === "dark") {
+          meta.content = urlTheme;
+          return;
+        }
+        try {
+          const saved = localStorage.getItem("color-scheme");
+          if (saved === "light" || saved === "dark") {
+            meta.content = saved;
+          }
+        } catch (_) {}
+      })();
+    </script>
+    <title>Loki 3.0 — Interaktiv HTML-förhandsvisning av gränssnittet</title>
+    <link rel="stylesheet" href="../../src/index.css" />
+    <style>
+      [hidden] {
+        display: none !important;
+      }
+      .icon-close-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        color: var(--text-muted);
+        min-inline-size: 30px;
+        min-block-size: 30px;
+        cursor: pointer;
+      }
+      @media (hover: hover) {
+        .icon-close-btn:hover {
+          background: var(--bg-surface-elevated);
+          color: var(--text-primary);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="loki-root">
+      <div role="status" aria-live="polite" class="visually-hidden" id="live-status"></div>
+
+      <div class="toast-pill" id="toast-pill" hidden aria-hidden="true">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:0.35rem">
+          <path d="M20 6 9 17l-5-5" />
+        </svg>
+        <span id="toast-text"></span>
+      </div>
+
+      <!-- ── 1. Kompakt Sidhuvud ── -->
+      <header class="top-header">
+        <div class="header-brand">
+          <img
+            src="../../public/loki-icon.png"
+            alt=""
+            aria-hidden="true"
+            class="brand-icon-img"
+          />
+          <div class="brand-titles">
+            <h1 class="brand-title">Loki</h1>
+            <span class="brand-tagline">
+              Lokala mötesanteckningar · 100 % på din dator
+            </span>
+          </div>
+        </div>
+
+        <div class="header-controls">
+          <button
+            type="button"
+            class="header-pill-btn model-ready"
+            id="open-models-btn"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect width="16" height="16" x="4" y="4" rx="2" />
+              <rect width="6" height="6" x="9" y="9" rx="1" />
+              <path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2" />
+            </svg>
+            <span id="header-model-label">Modell: E2B · Snabb (redo)</span>
+          </button>
+
+          <button
+            type="button"
+            class="header-pill-btn"
+            id="open-history-btn"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+              <path d="M3 3v5h5" />
+              <path d="M12 7v5l4 2" />
+            </svg>
+            <span>Tidigare möten</span>
+            <span class="pill-badge-count">4</span>
+          </button>
+
+          <button
+            type="button"
+            class="header-pill-btn"
+            id="open-log-btn"
+            title="Visa lokal felsökningslogg"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M15 12h-5M15 8h-5M19 17V5a2 2 0 0 0-2-2H4" />
+              <path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3" />
+            </svg>
+            <span>Logg</span>
+          </button>
+
+          <button
+            type="button"
+            class="header-pill-btn"
+            id="theme-toggle-btn"
+            aria-label="Färgtema: Ljust. Klicka för att växla tema."
+          >
+            <svg id="theme-icon-sun" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2M12 20v2m-7.07-17.07 1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+            </svg>
+            <svg id="theme-icon-moon" hidden width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+            </svg>
+            <span id="theme-label">Ljust</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- ── 2. Huvudarbetsyta ── -->
+      <main class="loki-main" id="loki-main">
+        <!-- VÄNSTER KOLUMN: Mötesunderlag, Mall & Inställningar -->
+        <div class="panel-card input-column" id="input-column">
+          <div class="field-group">
+            <label for="meeting-name-input" class="field-label">
+              Mötesnamn / Rubrik
+            </label>
+            <input
+              id="meeting-name-input"
+              type="text"
+              class="text-input"
+              value="Styrgruppsmöte Digitalisering & E-tjänster 2026-11-12"
+              placeholder="t.ex. Styrgruppsmöte Digitalisering 2026-11-12"
+            />
+          </div>
+
+          <div class="field-group">
+            <div class="field-label-row">
+              <label for="transcript-textarea" class="field-label">
+                Mötesunderlag / Transkribering
+              </label>
+              <span class="field-hint">
+                Word, Excel, PDF, VTT, SRT, ODT, TXT eller klistra in
+              </span>
+            </div>
+
+            <div class="transcript-box" id="transcript-box">
+              <div class="transcript-toolbar">
+                <button type="button" class="tb-btn" id="demo-sample-btn">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="17 8 12 3 7 8" />
+                    <line x1="12" x2="12" y1="3" y2="15" />
+                  </svg>
+                  Öppna fil…
+                </button>
+                <button type="button" class="tb-btn" id="demo-paste-btn">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect width="8" height="4" x="8" y="2" rx="1" ry="1" />
+                    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+                  </svg>
+                  Klistra in
+                </button>
+                <button type="button" class="tb-btn" id="demo-clear-btn">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3 6h18" />
+                    <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                    <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                  </svg>
+                  Rensa
+                </button>
+              </div>
+
+              <textarea
+                id="transcript-textarea"
+                class="transcript-textarea"
+              >Karin Holm: Vi hoppar direkt in på punkt ett – status för e-tjänsteplattformen inför release 2.4 den 26 november. Hur ligger vi till med lasttesterna, Johan?
+Johan Berg: Alla automatiska flödestester är gröna i testmiljön. Däremot såg vi igår att SITHS-inloggningen mot reservkortsflödet gav timeout vid mer än 400 samtidiga sessioner. Vi har lokaliserat flaskhalsen till session-cachen och lägger på en patch på tisdag.
+Sara Lindqvist: Bra fångat. Då behöver vi boka ett kort verifieringsfönster med kundtjänst och förvaltningen på onsdag förmiddag innan vi låser releasen.
+Karin Holm: Utmärkt, då beslutar vi att release 2.4 ligger kvar den 26 november under förutsättning att onsdagens verifiering av SITHS-reservflödet går igenom utan anmärkning.</textarea>
+
+              <div class="stats-strip" id="stats-strip">
+                <span class="stat-chip cleaned">
+                  Teams VTT (-26 % tidsstämplar/brus)
+                </span>
+                <span class="stat-chip">
+                  5 480 ord · ~42 min tal
+                </span>
+                <span class="stat-chip">
+                  ~7 149 tokens
+                </span>
+                <span class="stat-chip">
+                  Ett sammanhängande pass
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Mallväljare -->
+          <div class="field-group">
+            <div class="field-label-row">
+              <span class="field-label">Välj dokumentmall</span>
+              <div style="display:flex;gap:0.35rem">
+                <button type="button" class="tb-btn" id="open-template-btn">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M5 12h14M12 5v14" />
+                  </svg>
+                  Ny mall
+                </button>
+              </div>
+            </div>
+
+            <div class="template-grid" role="group" aria-label="Dokumentmallar" id="template-grid"></div>
+          </div>
+
+          <!-- Mötessammanhang -->
+          <div class="field-group">
+            <div class="field-label-row">
+              <label for="context-input" class="field-label">
+                Mötets sammanhang / Verksamhet (valfritt)
+              </label>
+            </div>
+            <input
+              id="context-input"
+              type="text"
+              class="text-input"
+              value="Regionens IT-enhet, e-tjänsteplattformen, SITHS-inloggning och Qulturum"
+              placeholder="t.ex. Regionens IT-enhet, införande av Cosmic och SITHS-kort"
+            />
+            <div class="context-chips-row">
+              <span class="context-chip-group">
+                <button type="button" class="context-chip-btn">IT &amp; Digitalisering</button>
+                <button type="button" class="context-chip-del" aria-label="Ta bort sparat sammanhang IT & Digitalisering">×</button>
+              </span>
+              <span class="context-chip-group">
+                <button type="button" class="context-chip-btn">Styrgrupp Vårdflöden</button>
+                <button type="button" class="context-chip-del" aria-label="Ta bort sparat sammanhang Styrgrupp Vårdflöden">×</button>
+              </span>
+            </div>
+          </div>
+
+          <!-- Tillval -->
+          <div class="options-row">
+            <button type="button" class="toggle-chip-btn" aria-pressed="false" id="opt-agenda">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m3 17 2 2 4-4" /><path d="m3 7 2 2 4-4" /><path d="M13 6h8M13 12h8M13 18h8" />
+              </svg>
+              <span>+ Lägg till agenda</span>
+            </button>
+            <button type="button" class="toggle-chip-btn" aria-pressed="false" id="opt-creative">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z" />
+              </svg>
+              <span>Kreativare språk</span>
+            </button>
+            <button type="button" class="toggle-chip-btn" aria-pressed="false" id="opt-thorough">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
+                <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" />
+                <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4" />
+              </svg>
+              <span>Noggrannare</span>
+            </button>
+          </div>
+
+          <button type="button" class="btn-primary-cta" id="primary-run-btn">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polygon points="6 3 20 12 6 21 6 3" />
+            </svg>
+            <span id="primary-run-label">Skapa minnesanteckning</span>
+          </button>
+        </div>
+
+        <!-- HÖGER KOLUMN: Färdigt dokument, 1-klicks mallbyte, Export & Justering -->
+        <div class="panel-card result-column">
+          <div role="toolbar" aria-label="Dokumentverktyg och export" class="action-toolbar">
+            <div class="toolbar-group" role="group" aria-label="Visning och redigering">
+              <button type="button" class="tb-btn" aria-pressed="false" id="focus-toggle-btn">
+                <svg id="icon-focus-close" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect width="18" height="18" x="3" y="3" rx="2" />
+                  <path d="M9 3v18" /><path d="m16 15-3-3 3-3" />
+                </svg>
+                <svg id="icon-focus-open" hidden width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect width="18" height="18" x="3" y="3" rx="2" />
+                  <path d="M9 3v18" /><path d="m14 9 3 3-3 3" />
+                </svg>
+                <span id="focus-toggle-label">Fokusläge</span>
+              </button>
+
+              <button type="button" class="tb-btn" aria-pressed="false" id="edit-toggle-btn">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" />
+                </svg>
+                <span>Redigera text</span>
+              </button>
+            </div>
+
+            <span class="tb-sep" aria-hidden="true"></span>
+
+            <div class="toolbar-group toolbar-group-end" role="group" aria-label="Kopiera och spara">
+              <button type="button" class="tb-btn-copy" id="copy-rich-btn">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+                  <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+                </svg>
+                <span>Kopiera för Word / Outlook</span>
+              </button>
+
+              <button type="button" class="tb-btn" id="copy-plain-btn">
+                <span>Ren text</span>
+              </button>
+
+              <button type="button" class="tb-btn" id="export-docx-btn">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+                  <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+                  <path d="M12 18v-6" /><path d="m9 15 3 3 3-3" />
+                </svg>
+                <span>Word (.docx)</span>
+              </button>
+
+              <button type="button" class="tb-btn" id="export-md-btn">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+                  <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+                  <path d="M10 9H8M16 13H8M16 17H8" />
+                </svg>
+                <span>.md / .txt</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 1-klicks mallbyte på Varm KV-cache -->
+          <div class="quick-template-tabs" role="group" aria-label="Snabbväxla mall på samma möte" id="quick-tabs"></div>
+
+          <!-- Dokumentyta -->
+          <div class="document-canvas" id="document-canvas"></div>
+
+          <!-- Iterativ "Justera resultatet" med Ångra -->
+          <form class="adjust-bar" id="adjust-bar">
+            <label for="adjust-directive-input" class="visually-hidden">
+              Justera resultatet med fritextdirektiv
+            </label>
+            <input
+              id="adjust-directive-input"
+              type="text"
+              class="text-input"
+              placeholder="Justera detaljer, t.ex. ”Kulturum ska stavas Qulturum” eller ”Lägg Sara som ansvarig på punkt 2”…"
+            />
+            <button type="submit" class="tb-btn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72" />
+                <path d="m14 7 3 3" />
+              </svg>
+              <span>Justera</span>
+            </button>
+            <button type="button" class="tb-btn" id="undo-btn" title="Ångra senaste omformulering eller mallkörning">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M9 14 4 9l5-5" />
+                <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11" />
+              </svg>
+              <span>Ångra (1)</span>
+            </button>
+          </form>
+        </div>
+      </main>
+
+      <!-- ── DIALOG 1: Språkmodeller (Gemma 4 E2B, E4B & 12B QAT) ── -->
+      <dialog
+        id="model-dialog"
+        class="loki-dialog"
+        closedby="any"
+        aria-labelledby="model-dialog-title"
+      >
+        <div class="dialog-header">
+          <h2 id="model-dialog-title">Lokala språkmodeller (100 % offline)</h2>
+          <form method="dialog">
+            <button type="submit" class="tb-btn" autofocus>Stäng</button>
+          </form>
+        </div>
+
+        <div class="dialog-body">
+          <p class="field-hint" style="margin:0">
+            Systemminne: <strong>32 GB RAM</strong> · Dynamiskt kontextfönster upp till
+            <strong>32 768 tokens</strong> i ett sammanhängande pass.
+          </p>
+
+          <div class="model-option-card active-model" id="model-card-e2b">
+            <div class="model-option-top">
+              <strong>Gemma 4 E2B QAT (2,62 GB)</strong>
+              <span class="kv-fast-badge">Delad från Maskera</span>
+            </div>
+            <p class="field-hint" style="margin:0">
+              Rekommenderad standard. Snabb och resurssnål med QAT-precision – utmärkt på alla bärbara datorer.
+            </p>
+            <div class="model-option-actions">
+              <button type="button" class="tb-btn" aria-pressed="true" data-select-model="e2b">
+                Aktiv modell
+              </button>
+            </div>
+          </div>
+
+          <div class="model-option-card" id="model-card-e4b">
+            <div class="model-option-top">
+              <strong>Gemma 4 E4B QAT (4,22 GB)</strong>
+              <span class="kv-fast-badge">Installerad</span>
+            </div>
+            <p class="field-hint" style="margin:0">
+              Mellanstor språkmodell för mer nyanserade protokoll och fackterminologi. Passar datorer med minst 16 GB RAM.
+            </p>
+            <div class="model-option-actions">
+              <button type="button" class="tb-btn" aria-pressed="false" data-select-model="e4b">
+                Använd denna modell
+              </button>
+              <button type="button" class="tb-btn">
+                Avinstallera (4,22 GB)
+              </button>
+            </div>
+          </div>
+
+          <div class="model-option-card" id="model-card-12b">
+            <div class="model-option-top">
+              <strong>Gemma 4 12B QAT (6,72 GB)</strong>
+              <span class="kv-fast-badge">Installerad</span>
+            </div>
+            <p class="field-hint" style="margin:0">
+              Maximal språklig skärpa och fackordstolkning för långa, komplexa möten. Rekommenderas för datorer med mer än 16 GB RAM.
+            </p>
+            <div class="model-option-actions">
+              <button type="button" class="tb-btn" aria-pressed="false" data-select-model="12b">
+                Använd denna modell
+              </button>
+              <button type="button" class="tb-btn">
+                Avinstallera (6,72 GB)
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="dialog-footer">
+          <div style="display:flex;gap:0.4rem;flex-wrap:wrap">
+            <button type="button" class="tb-btn">Importera GGUF-fil…</button>
+            <button type="button" class="tb-btn">Importera från mapp…</button>
+          </div>
+          <form method="dialog">
+            <button type="submit" class="tb-btn">Klar</button>
+          </form>
+        </div>
+      </dialog>
+
+      <!-- ── DIALOG 2: Lokal Möteshistorik ── -->
+      <dialog
+        id="history-dialog"
+        class="loki-dialog"
+        closedby="any"
+        aria-labelledby="history-dialog-title"
+      >
+        <div class="dialog-header">
+          <h2 id="history-dialog-title">Tidigare mötesanteckningar (endast på denna dator)</h2>
+          <form method="dialog">
+            <button type="submit" class="tb-btn" autofocus>Stäng</button>
+          </form>
+        </div>
+        <div class="dialog-body">
+          <div class="field-group">
+            <label for="history-search-input" class="visually-hidden">Sök i tidigare mötesanteckningar</label>
+            <input id="history-search-input" type="search" class="text-input" placeholder="Sök på mötesnamn, mall eller innehåll…" />
+          </div>
+          <div class="history-list">
+            <div class="history-item-row">
+              <button type="button" class="history-item-main">
+                <span class="history-item-title">Styrgruppsmöte Digitalisering &amp; E-tjänster 2026-11-12</span>
+                <span class="history-item-sub">Minnesanteckning · 2026-11-12 14:35 · Gemma 4 E2B QAT</span>
+              </button>
+            </div>
+            <div class="history-item-row">
+              <button type="button" class="history-item-main">
+                <span class="history-item-title">APT Utvecklingsenheten Qulturum</span>
+                <span class="history-item-sub">Mötesprotokoll · 2026-11-09 10:15 · Gemma 4 12B QAT</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="dialog-footer">
+          <span></span>
+          <form method="dialog">
+            <button type="submit" class="tb-btn">Stäng</button>
+          </form>
+        </div>
+      </dialog>
+
+      <!-- ── DIALOG 3: Lokal Felsökningslogg ── -->
+      <dialog
+        id="log-dialog"
+        class="loki-dialog"
+        closedby="any"
+        aria-labelledby="log-dialog-title"
+      >
+        <div class="dialog-header">
+          <h2 id="log-dialog-title">Lokal felsökningslogg</h2>
+          <form method="dialog">
+            <button type="submit" class="icon-close-btn" aria-label="Stäng loggfönster" autofocus>×</button>
+          </form>
+        </div>
+        <div class="dialog-body">
+          <p class="field-hint" style="margin-top:0">
+            Accelerator: <strong>Apple Metal GPU (eller Vulkan / CPU på Windows)</strong>
+          </p>
+          <pre class="md-code-block" style="margin:0">[14:32:08] Bakgrundsladdar modell 'e2b' vid programstart...
+[14:32:09] Modell 'Gemma 4 E2B QAT (2,62 GB)' redo i minnet (kontext=32768 tokens).
+[14:35:11] Varm KV-cache träff: 7 149 tokens återanvända (2,8 s).</pre>
+        </div>
+        <div class="dialog-footer">
+          <span></span>
+          <form method="dialog">
+            <button type="submit" class="tb-btn">Stäng</button>
+          </form>
+        </div>
+      </dialog>
+    </div>
+
+    <script>
+      (function () {
+        // Fallback för <dialog closedby="any"> i webbläsare som saknar stöd (MWG dialog-guiden)
+        if (!("closedBy" in HTMLDialogElement.prototype)) {
+          const outside = (e, dialog) => {
+            const r = dialog.getBoundingClientRect();
+            return (
+              e.clientX < r.left ||
+              e.clientX > r.right ||
+              e.clientY < r.top ||
+              e.clientY > r.bottom
+            );
+          };
+          for (const dialog of document.querySelectorAll('dialog[closedby="any"]')) {
+            let pressedOutside = false;
+            dialog.addEventListener("pointerdown", (e) => {
+              pressedOutside = outside(e, dialog);
+            });
+            dialog.addEventListener("pointerup", (e) => {
+              if (pressedOutside && outside(e, dialog)) dialog.close();
+            });
+          }
+        }
+
+        const ICONS = {
+          notebook:
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4"/><path d="M2 6h4M2 10h4M2 14h4M2 18h4"/><path d="M21.378 5.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z"/></svg>',
+          "file-text":
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8M16 13H8M16 17H8"/></svg>',
+          "list-checks":
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8M13 12h8M13 18h8"/></svg>',
+          "clipboard-list":
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4M12 16h4M8 11h.01M8 16h.01"/></svg>',
+          gavel:
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m14.5 12.5-8 8a2.119 2.119 0 1 1-3-3l8-8"/><path d="m16 16 6-6"/><path d="m8 8 6-6"/><path d="m9 7 8 8"/><path d="m21 11-8-8"/></svg>',
+          eraser:
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg>',
+        };
+
+        const TEMPLATES = [
+          {
+            id: "meeting-notes",
+            label: "Minnesanteckning",
+            desc: "Kronologisk minnesanteckning, kallprat bortrensat",
+            icon: "notebook",
+            duration: "3,3 s",
+            html: `
+              <div class="formatted-md">
+                <h3 class="md-h3">Status för e-tjänsteplattformen inför release 2.4</h3>
+                <p class="md-para">Samtliga automatiska flödestester är gröna i testmiljön inför planerad driftsättning den 26 november. Under gårdagens lasttester upptäcktes dock att SITHS-inloggningen mot reservkortsflödet gav timeout vid fler än 400 samtidiga sessioner. Orsaken är lokaliserad till session-cachen och en rättning installeras i testmiljön på tisdag.</p>
+                <ul class="md-list">
+                  <li><strong>Beslut:</strong> Release 2.4 ligger fast den 26 november förutsatt att onsdagens verifiering av SITHS-reservflödet godkänns.</li>
+                  <li><strong>Åtgärd:</strong> Johan Berg driftsätter cache-patchen i testmiljön senast tisdag kl. 15.00.</li>
+                  <li><strong>Åtgärd:</strong> Sara Lindqvist bokar gemensamt verifieringsfönster med kundtjänst och förvaltning på onsdag förmiddag.</li>
+                </ul>
+
+                <h3 class="md-h3">Pilotinförande med Qulturum och utbildningsstöd</h3>
+                <p class="md-para">Qulturum ansluter som första pilotverksamhet för det förenklade ansökningsflödet vecka 49. Utbildningsmaterial och korta lathundar för handläggare är klara för granskning, men avsnittet om reservrutiner vid kortbortfall behöver kompletteras.</p>
+                <ul class="md-list">
+                  <li><strong>Åtgärd:</strong> Sara Lindqvist skickar uppdaterad handläggarguide till Qulturums kontaktpersoner senast fredag 20 november.</li>
+                </ul>
+
+                <h3 class="md-h3">Budgetuppföljning Q4 och förvaltningsöverlämning</h3>
+                <p class="md-para">Projektet håller fastställd budgetram för fjärde kvartalet. Styrgruppen gick igenom tidsplanen för överlämning från projekt till ordinarie förvaltning vid årsskiftet och konstaterade att beredskapsschemat under julhelgerna behöver spikas före nästa styrgruppsmöte.</p>
+              </div>
+            `,
+          },
+          {
+            id: "meeting-minutes",
+            label: "Mötesprotokoll",
+            desc: "Strukturerat protokoll med deltagare, beslut och åtgärder",
+            icon: "file-text",
+            duration: "2,8 s",
+            html: `
+              <div class="formatted-md">
+                <h2 class="md-h2">Sammanfattning</h2>
+                <p class="md-para">Styrgruppen behandlade läget inför release 2.4 av e-tjänsteplattformen, åtgärdsplan för en identifierad flaskhals i SITHS-reservflödet under hög last samt pilotstarten med Qulturum vecka 49. Releasen den 26 november ligger fast villkorat godkänd onsdagsverifiering, och Q4-budgeten följer plan.</p>
+
+                <h2 class="md-h2">Deltagare</h2>
+                <ul class="md-list">
+                  <li>Karin Holm (ordförande, digitaliseringschef)</li>
+                  <li>Johan Berg (teknisk arkitekt, IT-enheten)</li>
+                  <li>Sara Lindqvist (förvaltningsledare, e-tjänster)</li>
+                </ul>
+
+                <h2 class="md-h2">Diskussionspunkter</h2>
+                <ul class="md-list">
+                  <li><strong>Release 2.4 och SITHS-lasttest:</strong> Flödestesterna är gröna men reservkortsflödet gav timeout över 400 samtidiga sessioner. Patch för session-cachen läggs på tisdag med gemensam verifiering onsdag förmiddag.</li>
+                  <li><strong>Pilotstart Qulturum (vecka 49):</strong> Handläggarmaterialet kompletteras med reservrutiner vid kortbortfall före utskick.</li>
+                  <li><strong>Budget Q4 &amp; överlämning:</strong> Budget i balans; julberedskap spikas inför decembermötet.</li>
+                </ul>
+
+                <h2 class="md-h2">Beslut</h2>
+                <ul class="md-list">
+                  <li>Driftsättning av e-tjänsteplattformen version 2.4 genomförs enligt plan den 26 november 2026 under förutsättning att onsdagens verifiering av SITHS-reservflödet godkänns utan anmärkning.</li>
+                  <li>Qulturum startar som första pilotverksamhet måndagen vecka 49.</li>
+                </ul>
+
+                <h2 class="md-h2">Åtgärder</h2>
+                <ul class="md-list">
+                  <li class="md-task-item"><span class="md-task-box">☐</span><span>Installera patch för SITHS session-cache i testmiljön — <strong>Johan Berg</strong> (tisdag kl. 15.00)</span></li>
+                  <li class="md-task-item"><span class="md-task-box">☐</span><span>Genomför verifiering av reservkortsflödet med kundtjänst och förvaltning — <strong>Sara Lindqvist</strong> (onsdag fm)</span></li>
+                  <li class="md-task-item"><span class="md-task-box">☐</span><span>Komplettera och skicka handläggarguide till Qulturum — <strong>Sara Lindqvist</strong> (20 november)</span></li>
+                  <li class="md-task-item"><span class="md-task-box">☐</span><span>Ta fram förslag på beredskapsschema för jul- och nyårshelgerna — <strong>Karin Holm &amp; Johan Berg</strong> (nästa möte)</span></li>
+                </ul>
+              </div>
+            `,
+          },
+          {
+            id: "summary",
+            label: "Kort sammanfattning",
+            desc: "5–10 punkter med det viktigaste",
+            icon: "list-checks",
+            duration: "2,1 s",
+            html: `
+              <div class="formatted-md">
+                <ul class="md-list">
+                  <li>Alla funktionella flödestester för e-tjänsteplattformen 2.4 är gröna inför planerad release 26 november.</li>
+                  <li>Lasttester visade timeout i SITHS-reservflödet vid mer än 400 samtidiga sessioner på grund av session-cachen.</li>
+                  <li>En teknisk patch läggs in på tisdag och verifieras med kundtjänst och förvaltning på onsdag förmiddag.</li>
+                  <li>Styrgruppen beslutade att hålla fast vid releasedatum 26 november villkorat godkänd onsdagsverifiering.</li>
+                  <li>Qulturum går in som första pilotverksamhet vecka 49 med uppdaterat handläggarstöd senast 20 november.</li>
+                  <li>Projektets Q4-budget är i balans och julens beredskapsschema fastställs vid nästa styrgruppsmöte.</li>
+                </ul>
+              </div>
+            `,
+          },
+          {
+            id: "action-items",
+            label: "Åtgärdspunkter",
+            desc: "Bara att-göra-listan med ansvariga",
+            icon: "clipboard-list",
+            duration: "1,9 s",
+            html: `
+              <div class="formatted-md">
+                <ul class="md-list">
+                  <li class="md-task-item"><span class="md-task-box">☐</span><span>Driftsätt patch för session-cachen i SITHS-reservflödet i testmiljön — <strong>Johan Berg</strong> (tisdag kl. 15.00)</span></li>
+                  <li class="md-task-item"><span class="md-task-box">☐</span><span>Boka och genomför verifieringsfönster med kundtjänst och förvaltning — <strong>Sara Lindqvist</strong> (onsdag förmiddag)</span></li>
+                  <li class="md-task-item"><span class="md-task-box">☐</span><span>Komplettera handläggarguiden med reservrutin och skicka till Qulturum — <strong>Sara Lindqvist</strong> (fredag 20 november)</span></li>
+                  <li class="md-task-item"><span class="md-task-box">☐</span><span>Ta fram beredskapsschema för jul- och nyårsperioden inför överlämning — <strong>Karin Holm &amp; Johan Berg</strong> (nästa styrgruppsmöte)</span></li>
+                </ul>
+              </div>
+            `,
+          },
+          {
+            id: "decision-log",
+            label: "Beslutslogg",
+            desc: "Fattade beslut med motivering",
+            icon: "gavel",
+            duration: "2,0 s",
+            html: `
+              <div class="formatted-md">
+                <p class="md-para"><strong>Beslut 1:</strong> Release 2.4 av e-tjänsteplattformen genomförs enligt plan den 26 november 2026, villkorat godkänd verifiering av SITHS-reservflödet på onsdag.<br/><strong>Motivering:</strong> Samtliga flödestester är gröna och grundorsaken till lasttestets timeout är isolerad till session-cachen med färdig rättning.</p>
+                <p class="md-para"><strong>Beslut 2:</strong> Qulturum startar som första pilotverksamhet vecka 49.<br/><strong>Motivering:</strong> Ansökningsflödet och utbildningsunderlaget är redo efter mindre komplettering kring reservkort.</p>
+              </div>
+            `,
+          },
+          {
+            id: "transcription-cleanup",
+            label: "Rätta transkriberingen",
+            desc: "Korrigera hörselfel utan att sammanfatta",
+            icon: "eraser",
+            duration: "3,6 s",
+            html: `
+              <div class="formatted-md">
+                <p class="md-para"><strong>Karin Holm:</strong> Vi hoppar direkt in på punkt ett – status för e-tjänsteplattformen inför release 2.4 den 26 november. Hur ligger vi till med lasttesterna, Johan?</p>
+                <p class="md-para"><strong>Johan Berg:</strong> Alla automatiska flödestester är gröna i testmiljön. Däremot såg vi igår att SITHS-inloggningen mot reservkortsflödet gav timeout vid mer än 400 samtidiga sessioner. Vi har lokaliserat flaskhalsen till session-cachen och lägger på en patch på tisdag.</p>
+                <p class="md-para"><strong>Sara Lindqvist:</strong> Bra fångat. Då behöver vi boka ett kort verifieringsfönster med kundtjänst och förvaltningen på onsdag förmiddag innan vi låser releasen.</p>
+              </div>
+            `,
+          },
+        ];
+
+        const MODELS = {
+          e2b: {
+            shortLabel: "E2B · Snabb",
+            fullLabel: "Gemma 4 E2B QAT (2,62 GB)",
+          },
+          e4b: {
+            shortLabel: "E4B · Fördjupad",
+            fullLabel: "Gemma 4 E4B QAT (4,22 GB)",
+          },
+          "12b": {
+            shortLabel: "12B · Maximal",
+            fullLabel: "Gemma 4 12B QAT (6,72 GB)",
+          },
+        };
+
+        const params = new URLSearchParams(window.location.search);
+        const initialView = params.get("view") || "notes";
+
+        let selectedTemplateId =
+          initialView === "protocol" ? "meeting-minutes" : "meeting-notes";
+        let focusMode = initialView === "protocol";
+        let emptyMode = initialView === "empty";
+        let activeModelId = initialView === "models" ? "12b" : "e2b";
+
+        const meta = document.getElementById("color-scheme-meta");
+        const lokiMain = document.getElementById("loki-main");
+        const inputColumn = document.getElementById("input-column");
+        const templateGrid = document.getElementById("template-grid");
+        const quickTabs = document.getElementById("quick-tabs");
+        const docCanvas = document.getElementById("document-canvas");
+        const adjustBar = document.getElementById("adjust-bar");
+        const primaryRunLabel = document.getElementById("primary-run-label");
+        const focusBtn = document.getElementById("focus-toggle-btn");
+        const focusLabel = document.getElementById("focus-toggle-label");
+        const iconFocusClose = document.getElementById("icon-focus-close");
+        const iconFocusOpen = document.getElementById("icon-focus-open");
+        const headerModelLabel = document.getElementById("header-model-label");
+        const meetingNameInput = document.getElementById("meeting-name-input");
+
+        function isCurrentlyDark() {
+          if (meta.content === "dark") return true;
+          if (meta.content === "light") return false;
+          return window.matchMedia("(prefers-color-scheme: dark)").matches;
+        }
+
+        function syncThemeButton() {
+          const dark = isCurrentlyDark();
+          document
+            .getElementById("theme-icon-sun")
+            .toggleAttribute("hidden", dark);
+          document
+            .getElementById("theme-icon-moon")
+            .toggleAttribute("hidden", !dark);
+          document.getElementById("theme-label").textContent = dark
+            ? "Mörkt"
+            : "Ljust";
+        }
+
+        document
+          .getElementById("theme-toggle-btn")
+          .addEventListener("click", () => {
+            const nextScheme = isCurrentlyDark() ? "light" : "dark";
+            const sysScheme = window.matchMedia("(prefers-color-scheme: dark)")
+              .matches
+              ? "dark"
+              : "light";
+            if (nextScheme === sysScheme) {
+              meta.content = "light dark";
+              try {
+                localStorage.removeItem("color-scheme");
+              } catch (_) {}
+            } else {
+              meta.content = nextScheme;
+              try {
+                localStorage.setItem("color-scheme", nextScheme);
+              } catch (_) {}
+            }
+            syncThemeButton();
+          });
+
+        window
+          .matchMedia("(prefers-color-scheme: dark)")
+          .addEventListener("change", syncThemeButton);
+
+        function showToast(msg) {
+          const pill = document.getElementById("toast-pill");
+          document.getElementById("toast-text").textContent = msg;
+          document.getElementById("live-status").textContent = msg;
+          pill.hidden = false;
+          clearTimeout(showToast._t);
+          showToast._t = setTimeout(() => {
+            pill.hidden = true;
+          }, 2200);
+        }
+
+        function syncModelUI() {
+          const entry = MODELS[activeModelId] || MODELS.e2b;
+          headerModelLabel.textContent = `Modell: ${entry.shortLabel} (redo)`;
+          for (const id of Object.keys(MODELS)) {
+            const card = document.getElementById(`model-card-${id}`);
+            const btn = document.querySelector(`[data-select-model="${id}"]`);
+            const active = id === activeModelId;
+            if (card) card.classList.toggle("active-model", active);
+            if (btn) {
+              btn.setAttribute("aria-pressed", String(active));
+              btn.textContent = active ? "Aktiv modell" : "Använd denna modell";
+            }
+          }
+        }
+
+        function renderAll() {
+          const currentTpl =
+            TEMPLATES.find((t) => t.id === selectedTemplateId) || TEMPLATES[0];
+
+          lokiMain.classList.toggle("focus-result", focusMode);
+          inputColumn.hidden = focusMode;
+          focusBtn.setAttribute("aria-pressed", String(focusMode));
+          focusLabel.textContent = focusMode ? "Visa underlag" : "Fokusläge";
+          iconFocusClose.toggleAttribute("hidden", focusMode);
+          iconFocusOpen.toggleAttribute("hidden", !focusMode);
+
+          primaryRunLabel.textContent = `Skapa ${currentTpl.label.toLowerCase()}`;
+
+          templateGrid.innerHTML = TEMPLATES.map(
+            (tpl) => `
+            <div class="template-card-wrap">
+              <button type="button" class="template-card-btn" aria-pressed="${
+                tpl.id === selectedTemplateId
+              }" data-tpl="${tpl.id}">
+                <span class="tpl-title-row">
+                  ${ICONS[tpl.icon]}
+                  <span>${tpl.label}</span>
+                </span>
+                <span class="tpl-desc">${tpl.desc}</span>
+              </button>
+            </div>
+          `
+          ).join("");
+
+          quickTabs.hidden = emptyMode;
+          adjustBar.hidden = emptyMode;
+
+          quickTabs.innerHTML = TEMPLATES.map(
+            (tpl) => `
+            <button type="button" class="quick-tab-btn" aria-pressed="${
+              tpl.id === selectedTemplateId
+            }" data-tpl="${tpl.id}">
+              ${ICONS[tpl.icon]}
+              <span>${tpl.label}</span>
+            </button>
+          `
+          ).join("");
+
+          if (emptyMode) {
+            docCanvas.innerHTML = `
+              <div class="empty-result-placeholder">
+                ${ICONS.notebook.replace('width="15" height="15"', 'width="32" height="32"')}
+                <h2>Mötesdokumentet visas här</h2>
+                <p>
+                  Lägg in en transkribering eller ett dokument till vänster, välj mall
+                  (t.ex. <strong>Minnesanteckning</strong> eller <strong>Mötesprotokoll</strong>)
+                  och klicka på <strong>Skapa</strong>. När mötet är inläst kan du växla
+                  mellan mallar på en sekund!
+                </p>
+              </div>
+            `;
+          } else {
+            const modelEntry = MODELS[activeModelId] || MODELS.e2b;
+            const title =
+              meetingNameInput.value.trim() || currentTpl.label;
+            docCanvas.innerHTML = `
+              <div class="doc-header-banner">
+                <h2 class="doc-header-title">${title}</h2>
+                <div class="doc-header-meta">
+                  <span>${currentTpl.label}</span>
+                  <span>·</span>
+                  <span>${modelEntry.fullLabel}</span>
+                  <span>·</span>
+                  <span>${currentTpl.duration}</span>
+                  <span class="kv-fast-badge">Varm cache: 7 149 tokens återanvända</span>
+                </div>
+              </div>
+              ${currentTpl.html}
+            `;
+          }
+        }
+
+        document.addEventListener("click", (e) => {
+          const tplBtn = e.target.closest("[data-tpl]");
+          if (tplBtn) {
+            selectedTemplateId = tplBtn.getAttribute("data-tpl");
+            emptyMode = false;
+            renderAll();
+            return;
+          }
+          const modelBtn = e.target.closest("[data-select-model]");
+          if (modelBtn) {
+            activeModelId = modelBtn.getAttribute("data-select-model");
+            syncModelUI();
+            renderAll();
+            showToast(`Bytte aktiv språkmodell till ${MODELS[activeModelId].fullLabel}`);
+          }
+        });
+
+        focusBtn.addEventListener("click", () => {
+          focusMode = !focusMode;
+          renderAll();
+        });
+
+        document
+          .getElementById("primary-run-btn")
+          .addEventListener("click", () => {
+            emptyMode = false;
+            renderAll();
+            showToast("Dokument skapat ur mötesunderlaget.");
+          });
+
+        document
+          .getElementById("demo-clear-btn")
+          .addEventListener("click", () => {
+            emptyMode = true;
+            renderAll();
+          });
+
+        document
+          .getElementById("copy-rich-btn")
+          .addEventListener("click", () => {
+            showToast("Kopierat med rubriker och listor för Word / Outlook!");
+          });
+
+        document
+          .getElementById("adjust-bar")
+          .addEventListener("submit", (e) => {
+            e.preventDefault();
+            const inp = document.getElementById("adjust-directive-input");
+            if (inp.value.trim()) {
+              inp.value = "";
+              showToast("Detaljjustering tillämpad med varm mötescache.");
+            }
+          });
+
+        for (const id of ["opt-agenda", "opt-creative", "opt-thorough"]) {
+          const btn = document.getElementById(id);
+          btn.addEventListener("click", () => {
+            const pressed = btn.getAttribute("aria-pressed") === "true";
+            btn.setAttribute("aria-pressed", String(!pressed));
+          });
+        }
+
+        const modelDialog = document.getElementById("model-dialog");
+        const historyDialog = document.getElementById("history-dialog");
+        const logDialog = document.getElementById("log-dialog");
+
+        document
+          .getElementById("open-models-btn")
+          .addEventListener("click", () => modelDialog.showModal());
+        document
+          .getElementById("open-history-btn")
+          .addEventListener("click", () => historyDialog.showModal());
+        document
+          .getElementById("open-log-btn")
+          .addEventListener("click", () => logDialog.showModal());
+
+        syncThemeButton();
+        syncModelUI();
+        renderAll();
+
+        if (initialView === "models") {
+          modelDialog.showModal();
+        } else if (initialView === "history") {
+          historyDialog.showModal();
+        }
+      })();
+    </script>
+  </body>
+</html>

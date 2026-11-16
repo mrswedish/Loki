@@ -1,4 +1,5 @@
 mod documents;
+mod evidence;
 mod logger;
 mod summarizer;
 mod transcript;
@@ -6,7 +7,7 @@ mod transcript;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,13 @@ static PREWARM_GEN: AtomicU64 = AtomicU64::new(0);
 static DOWNLOAD_CANCEL: AtomicBool = AtomicBool::new(false);
 static APP_EXITING: AtomicBool = AtomicBool::new(false);
 static STATE_LOCK: Mutex<()> = Mutex::new(());
+static EVIDENCE_CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+fn cleanup_session_evidence_cache() {
+    if let Some(dir) = EVIDENCE_CACHE_DIR.get() {
+        evidence::cleanup_all_evidence_cache(dir);
+    }
+}
 
 #[cfg(target_os = "windows")]
 static WINDOWS_SHUTDOWN_STARTED: AtomicBool = AtomicBool::new(false);
@@ -61,6 +69,7 @@ fn shutdown_engine() {
         sync_loaded_slot(&guard);
         logger::log_info("LLM-motor frigjord rent.");
     }
+    cleanup_session_evidence_cache();
 }
 
 /// På Windows orsakar `std::process::exit(0)` (`ExitProcess`) en klassisk Vulkan-deadlock i C++ globala
@@ -120,6 +129,7 @@ fn begin_windows_shutdown() {
         .name("loki-win-exit-watchdog".to_string())
         .spawn(|| {
             std::thread::sleep(Duration::from_millis(1200));
+            cleanup_session_evidence_cache();
             logger::log_info("Avslutar Loki via Windows-säkerhetsvakt.");
             terminate_current_process_windows(0);
         });
@@ -132,6 +142,7 @@ fn finish_windows_exit() -> ! {
     while !WINDOWS_ENGINE_DROP_DONE.load(Ordering::SeqCst) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(15));
     }
+    cleanup_session_evidence_cache();
     logger::log_info("Avslutar Loki rent (Windows).");
     terminate_current_process_windows(0);
 }
@@ -1024,8 +1035,14 @@ async fn summarize_meeting(
             .as_mut()
             .ok_or_else(|| "Språkmodellen kunde inte initieras.".to_string())?;
 
+        let cache_dir = EVIDENCE_CACHE_DIR
+            .get()
+            .cloned()
+            .or_else(|| app_data_root(&app).ok().map(|d| d.join("evidence_cache")));
+
         let res = engine.run_summarize(
             &request,
+            cache_dir.as_deref(),
             &SUMMARIZE_CANCEL,
             |prog| {
                 let _ = app.emit("summarize_progress", prog);
@@ -1151,6 +1168,7 @@ fn delete_history_entry(id: String, app: AppHandle) -> Result<Vec<HistoryEntry>,
 
 #[tauri::command]
 fn clear_all_history(app: AppHandle) -> Result<(), String> {
+    cleanup_session_evidence_cache();
     let _g = STATE_LOCK
         .lock()
         .map_err(|e| format!("Låsfel för lokalt tillstånd: {e}"))?;
@@ -1206,6 +1224,13 @@ pub fn run() {
                     summarizer::accelerator_label(),
                     summarizer::detect_total_ram_gb()
                 ));
+            }
+
+            // Initiera och städa sessionsmappen för mellanlagrade bevispaket på disk vid uppstart
+            if let Ok(root) = app_data_root(app.handle()) {
+                let ev_dir = root.join("evidence_cache");
+                evidence::cleanup_all_evidence_cache(&ev_dir);
+                let _ = EVIDENCE_CACHE_DIR.set(ev_dir);
             }
 
             // Värm upp språkmodellen i bakgrunden direkt vid uppstart om den redan finns på disk (t.ex. via Maskera!)

@@ -23,8 +23,17 @@ pub const MAX_CTX: u32 = 131_072;
 const DEFAULT_MIN_CTX: u32 = 16_384;
 /// Startfönster på GPU-datorer med gott om minne (>= 22 GB RAM) så 25k–28k-möten slipper omallokering.
 const HIGH_RAM_INIT_CTX: u32 = 36_864;
-/// Tak för enkelpass på ren CPU utan GPU-offload (undviker kvadratisk 30k-sirap på kontors-PC utan GPU).
-const CPU_SINGLE_PASS_MAX_CTX: u32 = 16_384;
+/// Tak för enkelpass på ren CPU utan GPU-offload (över ~8k–9k transkripttokens ger diskbaserade bevispaket både högre kvalitet och slipper kvadratisk CPU-sirap).
+const CPU_SINGLE_PASS_MAX_CTX: u32 = 12_288;
+/// Kompakt kontextfönster för svag hårdvara och Pass 1-bevisextrahering (~160 MB KV-cache i RAM).
+const WEAK_HW_EVIDENCE_CTX: u32 = 8_192;
+/// Avsnittsstorlek (~12–15 min tal) och överlapp vid strukturerad bevisextrahering till disk.
+const EVIDENCE_CHUNK_TOKENS: usize = 3_400;
+const EVIDENCE_OVERLAP_TOKENS: usize = 200;
+/// Avsnittsstorlek vid sekventiell korrekturläsning ("Rätta transkriberingen") på långa filer.
+const CLEANUP_CHUNK_TOKENS: usize = 2_200;
+/// Gräns i tokens för samlade bevispaket där Pass 2 byter från direktsyntes till tvåstegskodning (temamatris -> sektionssyntes från disk).
+const DIRECT_SYNTHESIS_MAX_EVIDENCE_TOKENS: usize = 4_800;
 /// Batchstorlek vid prompt-inläsning på GPU:
 /// - macOS Metal (Unified Memory): 2048/2048 för maximal SIMD-matrisgenomströmning.
 /// - Windows Vulkan (WDDM): 512/512 ger hög beräkningsmättnad utan att någonsin passera Windows WDDM:s
@@ -214,17 +223,6 @@ VIKTIGT: Ändra inget annat. Lägg inte till, ta inte bort och tolka inte om fak
 namn, siffror eller åtgärder utöver det direktiven säger. Behåll dokumentets struktur och \
 Markdown-format. Svara enbart med det justerade dokumentet – inga kommentarer.";
 
-pub const REDUCE_PROMPT: &str = "\
-Du får flera delsammanfattningar av olika avsnitt av samma möte, i kronologisk ordning \
-(separerade med \"---\"). Slå ihop dem till ETT enda sammanhängande dokument.\n\n\
-- Behåll kronologin strikt: avsnitten kommer i den ordning de inträffade.\n\
-- Slå ihop redundans: om samma ämne, beslut eller åtgärd nämns i flera delar, ta med det \
-en gång.\n\
-- Bevara alla beslut, åtgärder, namn och siffror exakt.\n\
-- Ignorera delar som bara säger \"Inget relevant i detta avsnitt\".\n\
-- Använd tydliga underrubriker per ämne. Lägg inte till nytt innehåll och tolka inte om.\n\
-Svara enbart med det sammanslagna dokumentet i Markdown.";
-
 // ── Datastrukturer för körning & progress ────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -247,6 +245,8 @@ pub struct SummarizeRequest {
     pub agenda: Option<String>,
     pub creative: bool,
     pub thorough: bool,
+    #[serde(default)]
+    pub deep_evidence: Option<bool>,
     pub model_id: Option<String>,
     pub sampling: Option<SamplingOptions>,
 }
@@ -460,33 +460,6 @@ pub fn build_kv_friendly_prompt(req: &SummarizeRequest, map_mode_only: bool) -> 
     )
 }
 
-pub fn build_reduce_prompt(parts: &[String], req: &SummarizeRequest) -> String {
-    let joined_parts = parts.join("\n\n---\n\n");
-    let raw_tpl = req.template_prompt.trim();
-    let stripped_task = raw_tpl
-        .strip_prefix(COMMON_PREAMBLE)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(raw_tpl);
-
-    let mut task_tail = format!("MÅLFORMAT ({}):\n{}", req.template_label, stripped_task);
-    if let Some(ag_str) = req.agenda.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        task_tail.push_str(
-            "\n\nSTRUKTUR ENLIGT AGENDA: Använd agendans punkter som rubriker i den ordning de står. \
-             Punkter utanför agendan samlas under \"Övrigt\". Ej berörda punkter markeras \"Ej behandlad\".\n\n\
-             --- AGENDA ---\n",
-        );
-        task_tail.push_str(ag_str);
-        task_tail.push_str("\n--- SLUT AGENDA ---");
-    }
-
-    let think_prefix = if req.thorough { "<|think|>" } else { "" };
-
-    format!(
-        "<bos><|turn>system\n{think_prefix}{REDUCE_PROMPT}<turn|>\n<|turn>user\n--- DELSAMMANFATTNINGAR I KRONOLOGISK ORDNING ---\n{joined_parts}\n--- SLUT PÅ DELSAMMANFATTNINGAR ---\n\n{task_tail}<turn|>\n<|turn>model\n"
-    )
-}
-
 pub fn build_adjust_prompt(current_markdown: &str, directive: &str) -> String {
     format!(
         "<bos><|turn>system\n{ADJUST_PROMPT}<turn|>\n<|turn>user\n--- NUVARANDE MÖTESDOKUMENT ---\n{}\n--- SLUT PÅ DOKUMENT ---\n\n--- JUSTERINGSDIREKTIV FRÅN ANVÄNDAREN ---\n{}\n--- SLUT PÅ DIREKTIV ---<turn|>\n<|turn>model\n",
@@ -495,74 +468,162 @@ pub fn build_adjust_prompt(current_markdown: &str, directive: &str) -> String {
     )
 }
 
-pub fn is_empty_chunk_response(text: &str) -> bool {
-    let trimmed = text.trim();
-    if trimmed.chars().count() >= 90 {
-        return false;
+fn format_template_task_tail(req: &SummarizeRequest) -> String {
+    let raw_tpl = req.template_prompt.trim();
+    let stripped_task = raw_tpl
+        .strip_prefix(COMMON_PREAMBLE)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(raw_tpl);
+
+    let mut out = String::new();
+    if let Some(ctx_str) = req.context.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let ctx_hdr = if req.creative {
+            CONTEXT_INSTRUCTION_CREATIVE
+        } else {
+            CONTEXT_INSTRUCTION
+        };
+        out.push_str("--- MÖTETS SAMMANHANG ---\n");
+        out.push_str(ctx_hdr);
+        out.push('\n');
+        out.push_str(ctx_str);
+        out.push_str("\n--- SLUT SAMMANHANG ---\n\n");
     }
-    let cleaned = trimmed
-        .trim_start_matches(['*', '_', '"', '\'', '`', ' '])
-        .to_lowercase();
-    cleaned.contains("inget relevant")
+
+    out.push_str(&format!(
+        "MÅLFORMAT ({}):\n{}",
+        req.template_label.trim(),
+        stripped_task
+    ));
+
+    if let Some(ag_str) = req.agenda.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        out.push_str(
+            "\n\nSTRUKTUR ENLIGT AGENDA: Använd agendans punkter som rubriker i den ordning de står. \
+             Punkter utanför agendan samlas under \"Övrigt\". Ej berörda punkter markeras \"Ej behandlad\".\n\n\
+             --- AGENDA ---\n",
+        );
+        out.push_str(ag_str);
+        out.push_str("\n--- SLUT AGENDA ---");
+    }
+    out
 }
 
-/// Delar upp en mycket lång transkribering vid stycke-/meningsgränser för map-reduce-fallback.
-pub fn split_into_chunks(
-    text: &str,
-    token_budget: usize,
-    chars_per_token: f64,
-    overlap_tokens: usize,
-) -> Vec<String> {
-    let char_budget = ((token_budget as f64) * chars_per_token).floor().max(500.0) as usize;
-    let overlap_chars = ((overlap_tokens as f64) * chars_per_token).floor().max(0.0) as usize;
+pub fn build_evidence_synthesis_prompt(
+    formatted_packets: &str,
+    consolidated_register: &str,
+    req: &SummarizeRequest,
+) -> String {
+    let think_prefix = if req.thorough { "<|think|>" } else { "" };
+    let task_tail = format_template_task_tail(req);
+    let sys = crate::evidence::EVIDENCE_SYNTHESIS_SYSTEM_PROMPT;
+    format!(
+        "<bos><|turn>system\n{think_prefix}{sys}<turn|>\n<|turn>user\n\
+         --- STRUKTURERADE BEVISPAKET FRÅN MÖTET ---\n{formatted_packets}--- SLUT PÅ BEVISPAKET ---\n\
+         {consolidated_register}\n{task_tail}<turn|>\n<|turn>model\n"
+    )
+}
 
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= char_budget {
-        return vec![text.to_string()];
+pub fn build_section_synthesis_prompt(
+    clusters: &[crate::evidence::ThemeCluster],
+    all_packets: &[crate::evidence::EvidencePacket],
+    completed_titles: &[String],
+    req: &SummarizeRequest,
+) -> String {
+    let think_prefix = if req.thorough { "<|think|>" } else { "" };
+    let sys = crate::evidence::SECTION_SYNTHESIS_SYSTEM_PROMPT;
+
+    let mut target_headings = String::new();
+    let mut relevant_indices: Vec<usize> = Vec::new();
+    for c in clusters {
+        target_headings.push_str(&format!(
+            "- ### {} (baseras på avsnitt {})\n",
+            c.title,
+            c.chunk_indices
+                .iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        relevant_indices.extend(c.chunk_indices.iter().copied());
+    }
+    relevant_indices.sort_unstable();
+    relevant_indices.dedup();
+
+    let mut evidence_body = String::new();
+    for idx in relevant_indices {
+        if let Some(pkt) = all_packets.get(idx.saturating_sub(1)) {
+            let formatted = pkt.format_for_synthesis();
+            if !formatted.is_empty() {
+                evidence_body.push_str(&formatted);
+                evidence_body.push('\n');
+            }
+        }
     }
 
-    let mut chunks = Vec::new();
-    let mut start = 0usize;
-    while start < chars.len() {
-        let mut end = (start + char_budget).min(chars.len());
-        if end < chars.len() {
-            // Sök bakåt i de sista 35 % av fönstret efter stycke- eller meningsbrytning
-            let min_break = start + (char_budget * 65 / 100);
-            let mut best_break = None;
-            for pos in (min_break..end).rev() {
-                if pos + 1 < chars.len() && chars[pos] == '\n' && chars[pos + 1] == '\n' {
-                    best_break = Some(pos + 1);
-                    break;
-                }
-            }
-            if best_break.is_none() {
-                for pos in (min_break..end).rev() {
-                    if (chars[pos] == '.' || chars[pos] == '!' || chars[pos] == '?')
-                        && pos + 1 < chars.len()
-                        && chars[pos + 1].is_whitespace()
-                    {
-                        best_break = Some(pos + 1);
-                        break;
-                    }
-                }
-            }
-            if let Some(b) = best_break {
-                end = b;
-            }
-        }
-
-        let slice_str: String = chars[start..end].iter().collect();
-        let trimmed = slice_str.trim();
-        if !trimmed.is_empty() {
-            chunks.push(trimmed.to_string());
-        }
-        if end >= chars.len() {
-            break;
-        }
-        start = end.saturating_sub(overlap_chars).max(start + 1);
+    let mut prev_note = String::new();
+    if !completed_titles.is_empty() {
+        prev_note.push_str("REDAN SKRIVNA TEMARUBRIKER TIDIGARE I DOKUMENTET (upprepa inte dessa):\n- ");
+        prev_note.push_str(&completed_titles.join("\n- "));
+        prev_note.push_str("\n\n");
     }
 
-    chunks
+    let raw_tpl = req.template_prompt.trim();
+    let stripped_task = raw_tpl
+        .strip_prefix(COMMON_PREAMBLE)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(raw_tpl);
+
+    let mut ctx_block = String::new();
+    if let Some(ctx_str) = req.context.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        ctx_block.push_str(&format!("MÖTETS SAMMANHANG: {ctx_str}\n\n"));
+    }
+
+    format!(
+        "<bos><|turn>system\n{think_prefix}{sys}<turn|>\n<|turn>user\n\
+         {ctx_block}{prev_note}\
+         ÖVERGRIPANDE STIL & MALL ({label}):\n{stripped_task}\n\n\
+         TEMASEKTIONER ATT SKRIVA NU:\n{target_headings}\n\
+         --- BEVISPAKET FÖR DESSA TEMAN ---\n{evidence_body}--- SLUT BEVISPAKET ---\n\n\
+         Skriv nu enbart dessa temasektioner (`### Rubrik`) i Markdown med full skärpa, inklusive eventuella oenigheter, risker och nyckelcitat.<turn|>\n<|turn>model\n",
+        label = req.template_label.trim()
+    )
+}
+
+pub fn build_decisions_appendix_prompt(consolidated_register: &str, thorough: bool) -> String {
+    let think_prefix = if thorough { "<|think|>" } else { "" };
+    format!(
+        "<bos><|turn>system\n{think_prefix}Du sammanställer avslutande besluts- och åtgärdsavsnitt för ett långt mötesdokument. \
+         Slå ihop dubbletter från överlappande avsnitt, bevara ansvariga och datum exakt, och lägg aldrig till fakta.<turn|>\n\
+         <|turn>user\n{consolidated_register}\n\
+         Skriv nu enbart avslutande Markdown-avsnitt med `## Samlade beslut` (om beslut finns) och `## Samlade åtgärder` \
+         (format `- [ ] Åtgärd — Ansvarig` om åtgärder finns). Inga inledande kommentarer.<turn|>\n<|turn>model\n"
+    )
+}
+
+pub fn build_cleanup_chunk_prompt(
+    chunk_text: &str,
+    chunk_index: usize,
+    total_chunks: usize,
+    rolling_state: &crate::evidence::RollingMeetingState,
+    context: Option<&str>,
+) -> String {
+    let mut extra = String::new();
+    if let Some(ctx_str) = context.map(str::trim).filter(|s| !s.is_empty()) {
+        extra.push_str(&format!(
+            "MÖTETS SAMMANHANG (för rätt stavning av facktermer och namn): {ctx_str}\n\n"
+        ));
+    }
+    let rolling = rolling_state.format_header();
+    if !rolling.is_empty() {
+        extra.push_str(&rolling);
+    }
+    format!(
+        "<bos><|turn>system\n{SHARED_SYSTEM_PROMPT}\n\n{CLEANUP_PROMPT}<turn|>\n<|turn>user\n\
+         {extra}--- DEL {chunk_index} AV {total_chunks} ATT KORREKTURLÄSA ---\n{}\n--- SLUT DEL {chunk_index} ---\n\n\
+         Leverera ENBART den språkligt korrigerade texten för del {chunk_index} utan att sammanfatta eller utelämna något.<turn|>\n<|turn>model\n",
+        chunk_text.trim()
+    )
 }
 
 /// Säker UTF-8-avkodning av strömmande BPE-bytes: klipper eventuella ofullständiga avslutande
@@ -663,6 +724,8 @@ impl SummarizerEngine {
                 // E4B/12B alltid ryms smidigt, och väx dynamiskt via `ensure_context_capacity` vid långa möten!
                 let base_init = if cfg!(target_os = "macos") && use_gpu && total_ram_gb >= 22.0 {
                     HIGH_RAM_INIT_CTX
+                } else if !use_gpu || total_ram_gb <= 10.5 {
+                    WEAK_HW_EVIDENCE_CTX
                 } else {
                     DEFAULT_MIN_CTX
                 };
@@ -766,7 +829,12 @@ impl SummarizerEngine {
     }
 
     fn ensure_context_capacity(&mut self, needed_ctx: u32) -> Result<(), String> {
-        let min_floor = DEFAULT_MIN_CTX.min(self.safe_ceiling);
+        let base_floor = if self.gpu_active {
+            DEFAULT_MIN_CTX
+        } else {
+            WEAK_HW_EVIDENCE_CTX
+        };
+        let min_floor = base_floor.min(self.safe_ceiling);
         let target = round_ctx_up(needed_ctx).clamp(min_floor, self.safe_ceiling);
         if self.ctx.is_some() && target <= self.current_n_ctx {
             return Ok(());
@@ -785,11 +853,11 @@ impl SummarizerEngine {
                 self.kv_q8_active = kv_q8;
                 Ok(())
             }
-            Err(err) if grown_target > DEFAULT_MIN_CTX => {
+            Err(err) if grown_target > WEAK_HW_EVIDENCE_CTX => {
                 crate::logger::log_warn(&format!(
-                    "Kunde inte växa kontextfönstret till {grown_target} tokens ({err}) — begränsar till {DEFAULT_MIN_CTX} och använder delsammanfattning."
+                    "Kunde inte växa kontextfönstret till {grown_target} tokens ({err}) — begränsar till {WEAK_HW_EVIDENCE_CTX} och använder diskbaserade bevispaket."
                 ));
-                let fallback = DEFAULT_MIN_CTX.min(self.safe_ceiling);
+                let fallback = WEAK_HW_EVIDENCE_CTX.min(self.safe_ceiling);
                 let (new_ctx, kv_q8) =
                     Self::create_context(&self.model, backend, fallback, self.gpu_active)?;
                 self.safe_ceiling = fallback;
@@ -944,6 +1012,7 @@ impl SummarizerEngine {
     pub fn run_summarize<FProg, FChunk>(
         &mut self,
         req: &SummarizeRequest,
+        evidence_cache_root: Option<&Path>,
         cancel_flag: &AtomicBool,
         mut on_progress: FProg,
         mut on_chunk: FChunk,
@@ -989,8 +1058,16 @@ impl SummarizerEngine {
         } else {
             self.safe_ceiling.min(CPU_SINGLE_PASS_MAX_CTX)
         };
+
+        let is_cleanup = req.template_id == "transcription-cleanup";
+        let user_requested_deep = req.deep_evidence.unwrap_or(false);
+        let workshop_auto_deep =
+            req.template_id == "thematic-workshop" && prompt_tokens.len() >= 5_500;
+        let force_evidence =
+            !is_cleanup && ((user_requested_deep && prompt_tokens.len() >= 900) || workshop_auto_deep);
+
         crate::logger::log_info(&format!(
-            "run_summarize: mall='{}', prompt_tokens={}, needed_total={}, single_ceiling={}, safe_ceiling={}, gpu={}, kv_q8={}, thorough={}, creative={}",
+            "run_summarize: mall='{}', prompt_tokens={}, needed_total={}, single_ceiling={}, safe_ceiling={}, gpu={}, kv_q8={}, thorough={}, creative={}, deep_evidence={}",
             req.template_id,
             prompt_tokens.len(),
             needed_total,
@@ -999,10 +1076,11 @@ impl SummarizerEngine {
             self.gpu_active,
             self.kv_q8_active,
             req.thorough,
-            req.creative
+            req.creative,
+            force_evidence
         ));
 
-        if needed_total <= effective_single_ceiling {
+        if !force_evidence && needed_total <= effective_single_ceiling {
             self.ensure_context_capacity(needed_total)?;
             if needed_total <= self.current_n_ctx {
                 let stats = self.generate_from_tokens(
@@ -1011,7 +1089,8 @@ impl SummarizerEngine {
                     temperature,
                     repeat_penalty,
                     presence_penalty,
-                    None,
+                    StepLabel::SingleDocument,
+                    MAX_ANSWER_TOKENS,
                     cancel_flag,
                     &mut on_progress,
                     &mut on_chunk,
@@ -1034,58 +1113,271 @@ impl SummarizerEngine {
             }
         }
 
-        // Map-Reduce-fallback för möten som överskrider kontexttaket (eller >16K på ren CPU utan GPU)
-        let chunk_ctx = if self.gpu_active {
-            self.safe_ceiling.min(32_768)
-        } else {
-            self.safe_ceiling.min(CPU_SINGLE_PASS_MAX_CTX)
-        };
-        self.ensure_context_capacity(chunk_ctx)?;
+        // Specialflöde för "Rätta transkriberingen" på långa möten: sekventiell korrekturläsning utan trunkerande REDUCE_PROMPT!
+        if is_cleanup {
+            return self.run_long_cleanup_stream(
+                req,
+                prompt_tokens.len(),
+                temperature,
+                repeat_penalty,
+                presence_penalty,
+                t0,
+                cancel_flag,
+                &mut on_progress,
+                &mut on_chunk,
+            );
+        }
+
+        // Diskbaserad Bevisextrahering & Tvåstegssyntes för långa möten och svag hårdvara!
+        let default_cache_dir = std::env::temp_dir().join("loki_evidence_cache");
+        let cache_root = evidence_cache_root.unwrap_or(&default_cache_dir);
+        self.run_evidence_pipeline(
+            req,
+            cache_root,
+            prompt_tokens.len(),
+            margin,
+            temperature,
+            repeat_penalty,
+            presence_penalty,
+            t0,
+            cancel_flag,
+            &mut on_progress,
+            &mut on_chunk,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_long_cleanup_stream<FProg, FChunk>(
+        &mut self,
+        req: &SummarizeRequest,
+        total_prompt_tokens: usize,
+        temperature: f32,
+        repeat_penalty: f32,
+        presence_penalty: f32,
+        t0: Instant,
+        cancel_flag: &AtomicBool,
+        on_progress: &mut FProg,
+        on_chunk: &mut FChunk,
+    ) -> Result<SummarizeResult, String>
+    where
+        FProg: FnMut(SummarizeProgressPayload),
+        FChunk: FnMut(SummarizeChunkPayload),
+    {
+        self.ensure_context_capacity(WEAK_HW_EVIDENCE_CTX)?;
         let transcript_tok_len = self.count_tokens(&req.transcript).max(1);
         let chars_per_tok =
             (req.transcript.chars().count() as f64) / (transcript_tok_len as f64);
-        let chunk_budget = ((chunk_ctx.saturating_sub(margin + 1500)) as usize).max(4096);
-        let chunks = split_into_chunks(&req.transcript, chunk_budget, chars_per_tok, 180);
-        let total_chunks = chunks.len();
+        let chunks = crate::evidence::split_transcript_on_turns(
+            &req.transcript,
+            CLEANUP_CHUNK_TOKENS,
+            chars_per_tok,
+            0,
+        );
+        let total_chunks = chunks.len().max(1);
 
-        let mut map_outputs: Vec<String> = Vec::with_capacity(total_chunks);
+        let rolling_state = crate::evidence::RollingMeetingState::default();
+        let mut accumulated = String::new();
         let mut total_gen_tokens = 0usize;
-        let mut total_think_tokens = 0usize;
+        let mut last_tps = 0.0f32;
 
         for (idx, chunk_text) in chunks.into_iter().enumerate() {
             if cancel_flag.load(Ordering::Relaxed) {
                 return Err(CANCELLED_ERR.to_string());
             }
-            let mut chunk_req = req.clone();
-            chunk_req.transcript = chunk_text;
-            let map_prompt = build_kv_friendly_prompt(&chunk_req, true);
-            let map_tokens = self
+            let c_num = idx + 1;
+            let c_prompt = build_cleanup_chunk_prompt(
+                &chunk_text,
+                c_num,
+                total_chunks,
+                &rolling_state,
+                req.context.as_deref(),
+            );
+            let c_tokens = self
                 .model
                 .vocab()
-                .tokenize(map_prompt.as_bytes(), false, true);
+                .tokenize(c_prompt.as_bytes(), false, true);
 
-            let mut silent_chunk = |_c: SummarizeChunkPayload| {};
-            let part_stats = self.generate_from_tokens(
-                &map_tokens,
-                req.thorough,
+            let prefix_so_far = accumulated.clone();
+            let gen_so_far = total_gen_tokens;
+            let mut stream_cb = |payload: SummarizeChunkPayload| {
+                let merged = if prefix_so_far.is_empty() {
+                    payload.full_text
+                } else {
+                    format!("{prefix_so_far}\n\n{}", payload.full_text)
+                };
+                on_chunk(SummarizeChunkPayload {
+                    full_text: merged,
+                    generated_tokens: gen_so_far + payload.generated_tokens,
+                    tokens_per_sec: payload.tokens_per_sec,
+                });
+            };
+
+            let stats = self.generate_from_tokens(
+                &c_tokens,
+                false,
                 temperature,
                 repeat_penalty,
                 presence_penalty,
-                Some((idx + 1, total_chunks)),
+                StepLabel::CleanupChunk {
+                    idx: c_num,
+                    total: total_chunks,
+                },
+                MAX_ANSWER_TOKENS,
                 cancel_flag,
-                &mut on_progress,
+                on_progress,
+                &mut stream_cb,
+            )?;
+
+            total_gen_tokens += stats.generated_tokens;
+            last_tps = stats.tokens_per_sec;
+            if !stats.text.trim().is_empty() {
+                if !accumulated.is_empty() {
+                    accumulated.push_str("\n\n");
+                }
+                accumulated.push_str(stats.text.trim());
+            }
+        }
+
+        on_chunk(SummarizeChunkPayload {
+            full_text: accumulated.clone(),
+            generated_tokens: total_gen_tokens,
+            tokens_per_sec: last_tps,
+        });
+
+        Ok(SummarizeResult {
+            markdown: accumulated,
+            model_id: self.model_id.clone(),
+            model_label: self.model_label.clone(),
+            prompt_tokens: total_prompt_tokens,
+            kv_reused_tokens: 0,
+            generated_tokens: total_gen_tokens,
+            thinking_tokens: 0,
+            duration_ms: t0.elapsed().as_millis() as u64,
+            tokens_per_sec: last_tps,
+            strategy: "cleanup-stream".to_string(),
+            used_temperature: temperature,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_evidence_pipeline<FProg, FChunk>(
+        &mut self,
+        req: &SummarizeRequest,
+        cache_root: &Path,
+        total_prompt_tokens: usize,
+        margin: u32,
+        temperature: f32,
+        repeat_penalty: f32,
+        presence_penalty: f32,
+        t0: Instant,
+        cancel_flag: &AtomicBool,
+        on_progress: &mut FProg,
+        on_chunk: &mut FChunk,
+    ) -> Result<SummarizeResult, String>
+    where
+        FProg: FnMut(SummarizeProgressPayload),
+        FChunk: FnMut(SummarizeChunkPayload),
+    {
+        self.ensure_context_capacity(WEAK_HW_EVIDENCE_CTX)?;
+        let transcript_tok_len = self.count_tokens(&req.transcript).max(1);
+        let chars_per_tok =
+            (req.transcript.chars().count() as f64) / (transcript_tok_len as f64);
+        let chunks = crate::evidence::split_transcript_on_turns(
+            &req.transcript,
+            EVIDENCE_CHUNK_TOKENS,
+            chars_per_tok,
+            EVIDENCE_OVERLAP_TOKENS,
+        );
+        let total_chunks = chunks.len().max(1);
+
+        let store = crate::evidence::EvidenceDiskStore::open(
+            cache_root,
+            &self.model_id,
+            req.context.as_deref(),
+            total_chunks,
+            &req.transcript,
+        )?;
+
+        crate::logger::log_info(&format!(
+            "Startar diskbaserad bevispipeline: {} avsnitt (~{} tokens/avsnitt), modell='{}'",
+            total_chunks, EVIDENCE_CHUNK_TOKENS, self.model_id
+        ));
+
+        let mut rolling_state = crate::evidence::RollingMeetingState::default();
+        let mut total_gen_tokens = 0usize;
+        let mut total_think_tokens = 0usize;
+        let mut disk_reused_chunks = 0usize;
+
+        for (idx, chunk_text) in chunks.into_iter().enumerate() {
+            if cancel_flag.load(Ordering::Relaxed) {
+                return Err(CANCELLED_ERR.to_string());
+            }
+            let c_num = idx + 1;
+
+            // Checkpointing & Mallbytes-cache: läs direkt från lokal disk om avsnittet redan är extraherat i sessionen!
+            if let Some(cached_pkt) = store.load_chunk(c_num) {
+                rolling_state.update_from_packet(&cached_pkt);
+                disk_reused_chunks += 1;
+                on_progress(SummarizeProgressPayload {
+                    phase: "extracting_evidence".to_string(),
+                    label: format!(
+                        "Återanvänder sparat bevispaket {c_num} av {total_chunks} från lokal disk…"
+                    ),
+                    prefill_percent: ((c_num * 100) / total_chunks) as u8,
+                    kv_reused_tokens: disk_reused_chunks * EVIDENCE_CHUNK_TOKENS,
+                    prompt_tokens: total_prompt_tokens,
+                    thinking_tokens: total_think_tokens,
+                    generated_tokens: total_gen_tokens,
+                    tokens_per_sec: 0.0,
+                    chunk_current: Some(c_num),
+                    chunk_total: Some(total_chunks),
+                });
+                continue;
+            }
+
+            let extract_prompt = crate::evidence::build_evidence_extract_prompt(
+                &chunk_text,
+                c_num,
+                total_chunks,
+                &rolling_state,
+                req.context.as_deref(),
+                false,
+            );
+            let extract_tokens = self
+                .model
+                .vocab()
+                .tokenize(extract_prompt.as_bytes(), false, true);
+
+            // Rensa cached_tokens inför fristående avsnitt så KV-cachen hålls minimal i RAM
+            self.cached_tokens.clear();
+            let mut silent_chunk = |_c: SummarizeChunkPayload| {};
+            let part_stats = self.generate_from_tokens(
+                &extract_tokens,
+                false,
+                0.05,
+                1.08,
+                0.0,
+                StepLabel::EvidenceExtract {
+                    idx: c_num,
+                    total: total_chunks,
+                },
+                1_280,
+                cancel_flag,
+                on_progress,
                 &mut silent_chunk,
             )?;
 
             total_gen_tokens += part_stats.generated_tokens;
             total_think_tokens += part_stats.thinking_tokens;
 
-            if !is_empty_chunk_response(&part_stats.text) {
-                map_outputs.push(part_stats.text);
-            }
+            let pkt = crate::evidence::parse_evidence_packet(&part_stats.text, c_num, total_chunks);
+            store.save_chunk(&pkt)?;
+            rolling_state.update_from_packet(&pkt);
         }
 
-        if map_outputs.is_empty() {
+        let all_packets = store.load_all_chunks()?;
+        let has_any_substance = all_packets.iter().any(|p| p.has_substance());
+        if !has_any_substance {
             let empty_msg = "Inget relevant mötesinnehåll identifierades i underlaget.".to_string();
             on_chunk(SummarizeChunkPayload {
                 full_text: empty_msg.clone(),
@@ -1096,86 +1388,320 @@ impl SummarizerEngine {
                 markdown: empty_msg,
                 model_id: self.model_id.clone(),
                 model_label: self.model_label.clone(),
-                prompt_tokens: prompt_tokens.len(),
-                kv_reused_tokens: 0,
+                prompt_tokens: total_prompt_tokens,
+                kv_reused_tokens: disk_reused_chunks * EVIDENCE_CHUNK_TOKENS,
                 generated_tokens: total_gen_tokens,
                 thinking_tokens: total_think_tokens,
                 duration_ms: t0.elapsed().as_millis() as u64,
                 tokens_per_sec: 0.0,
-                strategy: "chunked".to_string(),
+                strategy: "evidence".to_string(),
                 used_temperature: temperature,
             });
         }
 
-        if map_outputs.len() == 1 && req.agenda.as_deref().unwrap_or("").trim().is_empty() {
-            let only = map_outputs.remove(0);
-            on_chunk(SummarizeChunkPayload {
-                full_text: only.clone(),
-                generated_tokens: total_gen_tokens,
-                tokens_per_sec: 0.0,
-            });
-            return Ok(SummarizeResult {
-                markdown: only,
-                model_id: self.model_id.clone(),
-                model_label: self.model_label.clone(),
-                prompt_tokens: prompt_tokens.len(),
-                kv_reused_tokens: 0,
-                generated_tokens: total_gen_tokens,
-                thinking_tokens: total_think_tokens,
-                duration_ms: t0.elapsed().as_millis() as u64,
-                tokens_per_sec: 0.0,
-                strategy: "chunked".to_string(),
-                used_temperature: temperature,
-            });
+        let consolidated_register =
+            crate::evidence::format_consolidated_decisions_and_actions(&all_packets);
+
+        // För ren Åtgärdspunkter- eller Beslutslogg-mall räcker det konsoliderade registret + kort kontext
+        // nästan alltid för ett enda blixtsnabbt syntespass även på 150 000-tokensmöten!
+        let mut full_evidence_text = String::new();
+        if (req.template_id == "action-items" || req.template_id == "decision-log")
+            && !consolidated_register.is_empty()
+            && all_packets.len() > 10
+        {
+            for pkt in &all_packets {
+                if !pkt.decisions.is_empty() || !pkt.actions.is_empty() {
+                    full_evidence_text.push_str(&pkt.format_for_synthesis());
+                    full_evidence_text.push('\n');
+                }
+            }
+        }
+        if full_evidence_text.is_empty() {
+            for pkt in &all_packets {
+                let s = pkt.format_for_synthesis();
+                if !s.is_empty() {
+                    full_evidence_text.push_str(&s);
+                    full_evidence_text.push('\n');
+                }
+            }
         }
 
-        let reduce_prompt = build_reduce_prompt(&map_outputs, req);
-        let reduce_tokens = self
+        let direct_prompt =
+            build_evidence_synthesis_prompt(&full_evidence_text, &consolidated_register, req);
+        let direct_tokens = self
             .model
             .vocab()
-            .tokenize(reduce_prompt.as_bytes(), false, true);
-        let needed_reduce = (reduce_tokens.len() as u32).saturating_add(margin);
-        self.ensure_context_capacity(needed_reduce.min(self.safe_ceiling))?;
+            .tokenize(direct_prompt.as_bytes(), false, true);
+        let evidence_only_tokens = self.count_tokens(&full_evidence_text);
+        let max_direct_ctx = if self.gpu_active {
+            self.safe_ceiling.min(24_576)
+        } else {
+            self.safe_ceiling.min(CPU_SINGLE_PASS_MAX_CTX)
+        };
+        let needed_direct = (direct_tokens.len() as u32).saturating_add(margin);
 
+        // ── Pass 2 Alternativ A: Samlad Direktsyntes från Bevispaket (`evidence`) ──
+        if evidence_only_tokens <= DIRECT_SYNTHESIS_MAX_EVIDENCE_TOKENS
+            && needed_direct <= max_direct_ctx
+        {
+            self.ensure_context_capacity(needed_direct)?;
+            if needed_direct <= self.current_n_ctx {
+                let synth_label = if disk_reused_chunks == total_chunks {
+                    format!(
+                        "Skapar {} direkt ur sparade bevispaket på disk…",
+                        req.template_label.to_lowercase()
+                    )
+                } else {
+                    format!(
+                        "Steg 2/2: Skapar {} utifrån samtliga bevispaket…",
+                        req.template_label.to_lowercase()
+                    )
+                };
+                on_progress(SummarizeProgressPayload {
+                    phase: "reducing".to_string(),
+                    label: synth_label,
+                    prefill_percent: 0,
+                    kv_reused_tokens: disk_reused_chunks * EVIDENCE_CHUNK_TOKENS,
+                    prompt_tokens: direct_tokens.len(),
+                    thinking_tokens: total_think_tokens,
+                    generated_tokens: total_gen_tokens,
+                    tokens_per_sec: 0.0,
+                    chunk_current: Some(total_chunks),
+                    chunk_total: Some(total_chunks),
+                });
+
+                self.cached_tokens.clear();
+                let synth_stats = self.generate_from_tokens(
+                    &direct_tokens,
+                    req.thorough,
+                    temperature,
+                    repeat_penalty,
+                    presence_penalty,
+                    StepLabel::SingleDocument,
+                    MAX_ANSWER_TOKENS,
+                    cancel_flag,
+                    on_progress,
+                    on_chunk,
+                )?;
+
+                total_gen_tokens += synth_stats.generated_tokens;
+                total_think_tokens += synth_stats.thinking_tokens;
+
+                return Ok(SummarizeResult {
+                    markdown: synth_stats.text,
+                    model_id: self.model_id.clone(),
+                    model_label: self.model_label.clone(),
+                    prompt_tokens: total_prompt_tokens,
+                    kv_reused_tokens: disk_reused_chunks * EVIDENCE_CHUNK_TOKENS,
+                    generated_tokens: total_gen_tokens,
+                    thinking_tokens: total_think_tokens,
+                    duration_ms: t0.elapsed().as_millis() as u64,
+                    tokens_per_sec: synth_stats.tokens_per_sec,
+                    strategy: "evidence".to_string(),
+                    used_temperature: temperature,
+                });
+            }
+        }
+
+        // ── Pass 2 Alternativ B: Tvåstegskodning från disk (`evidence-2pass` för 60k–200k+ möten / workshops) ──
+        crate::logger::log_info(&format!(
+            "Bevisvolym {} tokens överstiger direktsyntesgräns — kör tvåstegskodning (Temamatris -> Sektionssyntes från disk)",
+            evidence_only_tokens
+        ));
+
+        self.ensure_context_capacity(WEAK_HW_EVIDENCE_CTX)?;
         on_progress(SummarizeProgressPayload {
-            phase: "reducing".to_string(),
-            label: "Slår ihop alla delsammanfattningar till ett sammanhängande dokument…".to_string(),
+            phase: "thematic_coding".to_string(),
+            label: format!(
+                "Steg 2/3: Kartlägger gemensamma teman över alla {total_chunks} mötesavsnitt…"
+            ),
             prefill_percent: 0,
-            kv_reused_tokens: 0,
-            prompt_tokens: reduce_tokens.len(),
+            kv_reused_tokens: disk_reused_chunks * EVIDENCE_CHUNK_TOKENS,
+            prompt_tokens: total_prompt_tokens,
             thinking_tokens: total_think_tokens,
             generated_tokens: total_gen_tokens,
             tokens_per_sec: 0.0,
-            chunk_current: Some(total_chunks),
+            chunk_current: None,
             chunk_total: Some(total_chunks),
         });
 
-        let red_stats = self.generate_from_tokens(
-            &reduce_tokens,
-            req.thorough,
-            temperature,
-            repeat_penalty,
-            presence_penalty,
-            None,
-            cancel_flag,
-            &mut on_progress,
-            &mut on_chunk,
-        )?;
+        let matrix_prompt = crate::evidence::build_theme_matrix_prompt(
+            &all_packets,
+            req.agenda.as_deref(),
+            req.context.as_deref(),
+        );
+        let matrix_tokens = self
+            .model
+            .vocab()
+            .tokenize(matrix_prompt.as_bytes(), false, true);
+        let needed_matrix = (matrix_tokens.len() as u32).saturating_add(1024);
+        self.ensure_context_capacity(needed_matrix.min(self.safe_ceiling))?;
 
-        total_gen_tokens += red_stats.generated_tokens;
-        total_think_tokens += red_stats.thinking_tokens;
+        self.cached_tokens.clear();
+        let mut silent_matrix_chunk = |_c: SummarizeChunkPayload| {};
+        let matrix_stats = self.generate_from_tokens(
+            &matrix_tokens,
+            false,
+            0.05,
+            1.05,
+            0.0,
+            StepLabel::ThematicMatrix,
+            768,
+            cancel_flag,
+            on_progress,
+            &mut silent_matrix_chunk,
+        )?;
+        total_gen_tokens += matrix_stats.generated_tokens;
+
+        let clusters =
+            crate::evidence::parse_theme_clusters_with_full_coverage(&matrix_stats.text, &all_packets);
+        // Max ~11 500 tecken bevis per batch (~3 000–3 400 tokens -> ryms alltid i ett 8 192-fönster på svag hårdvara!)
+        let theme_batches =
+            crate::evidence::batch_theme_clusters_for_budget(&clusters, &all_packets, 11_500);
+        let total_batches = theme_batches.len().max(1);
+
+        let mut accumulated_doc = String::new();
+        let mut completed_titles: Vec<String> = Vec::new();
+        let mut last_tps = 0.0f32;
+
+        for (b_idx, batch_clusters) in theme_batches.into_iter().enumerate() {
+            if cancel_flag.load(Ordering::Relaxed) {
+                return Err(CANCELLED_ERR.to_string());
+            }
+            let step_no = b_idx + 1;
+            let first_title = batch_clusters
+                .first()
+                .map(|c| c.title.clone())
+                .unwrap_or_else(|| format!("Del {step_no}"));
+
+            let sec_prompt = build_section_synthesis_prompt(
+                &batch_clusters,
+                &all_packets,
+                &completed_titles,
+                req,
+            );
+            let sec_tokens = self
+                .model
+                .vocab()
+                .tokenize(sec_prompt.as_bytes(), false, true);
+            let needed_sec = (sec_tokens.len() as u32).saturating_add(margin);
+            self.ensure_context_capacity(needed_sec.min(self.safe_ceiling))?;
+
+            let prefix_so_far = accumulated_doc.clone();
+            let gen_so_far = total_gen_tokens;
+            let mut stream_sec = |payload: SummarizeChunkPayload| {
+                let merged = if prefix_so_far.is_empty() {
+                    payload.full_text
+                } else {
+                    format!("{prefix_so_far}\n\n{}", payload.full_text)
+                };
+                on_chunk(SummarizeChunkPayload {
+                    full_text: merged,
+                    generated_tokens: gen_so_far + payload.generated_tokens,
+                    tokens_per_sec: payload.tokens_per_sec,
+                });
+            };
+
+            self.cached_tokens.clear();
+            let sec_stats = self.generate_from_tokens(
+                &sec_tokens,
+                req.thorough,
+                temperature,
+                repeat_penalty,
+                presence_penalty,
+                StepLabel::SynthesisSection {
+                    idx: step_no,
+                    total: total_batches,
+                    title: &first_title,
+                },
+                2_560,
+                cancel_flag,
+                on_progress,
+                &mut stream_sec,
+            )?;
+
+            total_gen_tokens += sec_stats.generated_tokens;
+            total_think_tokens += sec_stats.thinking_tokens;
+            last_tps = sec_stats.tokens_per_sec;
+
+            if !sec_stats.text.trim().is_empty() {
+                if !accumulated_doc.is_empty() {
+                    accumulated_doc.push_str("\n\n");
+                }
+                accumulated_doc.push_str(sec_stats.text.trim());
+            }
+            for c in batch_clusters {
+                completed_titles.push(c.title);
+            }
+        }
+
+        // Avslutande sammanslagning av samtliga beslut & åtgärder ur kontrollregistret så noll åtgärder tappas!
+        if !consolidated_register.is_empty() && req.template_id != "summary" {
+            let app_prompt = build_decisions_appendix_prompt(&consolidated_register, false);
+            let app_tokens = self
+                .model
+                .vocab()
+                .tokenize(app_prompt.as_bytes(), false, true);
+            let needed_app = (app_tokens.len() as u32).saturating_add(2048);
+            if needed_app <= self.safe_ceiling {
+                self.ensure_context_capacity(needed_app)?;
+                let prefix_so_far = accumulated_doc.clone();
+                let gen_so_far = total_gen_tokens;
+                let mut stream_app = |payload: SummarizeChunkPayload| {
+                    let merged = if prefix_so_far.is_empty() {
+                        payload.full_text
+                    } else {
+                        format!("{prefix_so_far}\n\n---\n\n{}", payload.full_text)
+                    };
+                    on_chunk(SummarizeChunkPayload {
+                        full_text: merged,
+                        generated_tokens: gen_so_far + payload.generated_tokens,
+                        tokens_per_sec: payload.tokens_per_sec,
+                    });
+                };
+
+                self.cached_tokens.clear();
+                if let Ok(app_stats) = self.generate_from_tokens(
+                    &app_tokens,
+                    false,
+                    0.05,
+                    1.08,
+                    0.0,
+                    StepLabel::DecisionsAppendix,
+                    1_536,
+                    cancel_flag,
+                    on_progress,
+                    &mut stream_app,
+                ) {
+                    total_gen_tokens += app_stats.generated_tokens;
+                    last_tps = app_stats.tokens_per_sec;
+                    if !app_stats.text.trim().is_empty() {
+                        if !accumulated_doc.is_empty() {
+                            accumulated_doc.push_str("\n\n---\n\n");
+                        }
+                        accumulated_doc.push_str(app_stats.text.trim());
+                    }
+                }
+            }
+        }
+
+        on_chunk(SummarizeChunkPayload {
+            full_text: accumulated_doc.clone(),
+            generated_tokens: total_gen_tokens,
+            tokens_per_sec: last_tps,
+        });
 
         Ok(SummarizeResult {
-            markdown: red_stats.text,
+            markdown: accumulated_doc,
             model_id: self.model_id.clone(),
             model_label: self.model_label.clone(),
-            prompt_tokens: prompt_tokens.len(),
-            kv_reused_tokens: 0,
+            prompt_tokens: total_prompt_tokens,
+            kv_reused_tokens: disk_reused_chunks * EVIDENCE_CHUNK_TOKENS,
             generated_tokens: total_gen_tokens,
             thinking_tokens: total_think_tokens,
             duration_ms: t0.elapsed().as_millis() as u64,
-            tokens_per_sec: red_stats.tokens_per_sec,
-            strategy: "chunked".to_string(),
+            tokens_per_sec: last_tps,
+            strategy: "evidence-2pass".to_string(),
             used_temperature: temperature,
         })
     }
@@ -1215,7 +1741,8 @@ impl SummarizerEngine {
             0.08,
             1.05,
             0.0,
-            None,
+            StepLabel::SingleDocument,
+            MAX_ANSWER_TOKENS,
             cancel_flag,
             &mut on_progress,
             &mut on_chunk,
@@ -1244,7 +1771,8 @@ impl SummarizerEngine {
         temperature: f32,
         repeat_penalty: f32,
         presence_penalty: f32,
-        chunk_info: Option<(usize, usize)>,
+        step_label: StepLabel<'_>,
+        max_answer_tokens: usize,
         cancel_flag: &AtomicBool,
         on_progress: &mut FProg,
         on_chunk: &mut FChunk,
@@ -1255,6 +1783,7 @@ impl SummarizerEngine {
     {
         let vocab = self.model.vocab();
         let n_vocab = self.model.n_vocab();
+        let chunk_pair = step_label.chunk_pair();
 
         // Hitta längsta gemensamma token-prefix i KV-cachen (behåll som mest len - 1 så att sista token ger färska logits)
         let common_prefix = self
@@ -1315,12 +1844,29 @@ impl SummarizerEngine {
             let pct = (((keep_len + chunk_start) as f64 / (prompt_tokens.len() as f64)) * 100.0)
                 .round()
                 .clamp(0.0, 99.0) as u8;
-            let label = if let Some((c, tot)) = chunk_info {
-                format!("Läser in mötesdel {c} av {tot} ({pct} %)…")
-            } else if keep_len > 500 && step_idx == 0 {
-                format!("Återanvänder mötet ur varm cache ({keep_len} tokens)…")
-            } else {
-                format!("Läser in mötestexten ({pct} %)…")
+            let label = match step_label {
+                StepLabel::EvidenceExtract { idx, total } => format!(
+                    "Steg 1/2: Läser in avsnitt {idx} av {total} ({pct} %) — minnessnålt läge…"
+                ),
+                StepLabel::ThematicMatrix => {
+                    format!("Steg 2/3: Läser avsnittsöversikt för temakodning ({pct} %)…")
+                }
+                StepLabel::SynthesisSection { idx, total, title } => {
+                    format!("Steg 3/3: Läser bevispaket för sektion {idx}/{total} – {title} ({pct} %)…")
+                }
+                StepLabel::DecisionsAppendix => {
+                    format!("Sammanställer fullständigt besluts- och åtgärdsregister ({pct} %)…")
+                }
+                StepLabel::CleanupChunk { idx, total } => {
+                    format!("Läser in del {idx} av {total} för korrekturläsning ({pct} %)…")
+                }
+                StepLabel::SingleDocument => {
+                    if keep_len > 500 && step_idx == 0 {
+                        format!("Återanvänder mötet ur varm cache ({keep_len} tokens)…")
+                    } else {
+                        format!("Läser in mötestexten ({pct} %)…")
+                    }
+                }
             };
 
             on_progress(SummarizeProgressPayload {
@@ -1332,8 +1878,8 @@ impl SummarizerEngine {
                 thinking_tokens: 0,
                 generated_tokens: 0,
                 tokens_per_sec: 0.0,
-                chunk_current: chunk_info.map(|x| x.0),
-                chunk_total: chunk_info.map(|x| x.1),
+                chunk_current: chunk_pair.map(|x| x.0),
+                chunk_total: chunk_pair.map(|x| x.1),
             });
 
             batch.clear();
@@ -1386,9 +1932,9 @@ impl SummarizerEngine {
             .unwrap_or_else(Instant::now);
 
         let max_total_steps = if thorough {
-            MAX_THOUGHT_TOKENS + MAX_ANSWER_TOKENS
+            MAX_THOUGHT_TOKENS + max_answer_tokens
         } else {
-            MAX_ANSWER_TOKENS + 16
+            max_answer_tokens + 16
         };
 
         for _ in 0..max_total_steps {
@@ -1429,10 +1975,13 @@ impl SummarizerEngine {
                         last_ui_emit = Instant::now();
                         let secs = gen_start.elapsed().as_secs_f32().max(0.001);
                         let tps = (thinking_tokens as f32) / secs;
-                        let lbl = if let Some((c, tot)) = chunk_info {
-                            format!("Resonerar kring mötesdel {c}/{tot} ({thinking_tokens} tanketokens)…")
-                        } else {
-                            format!("Tänker igenom struktur och detaljer ({thinking_tokens} tanketokens)…")
+                        let lbl = match step_label {
+                            StepLabel::SynthesisSection { idx, total, title } => format!(
+                                "Resonerar kring sektion {idx}/{total} – {title} ({thinking_tokens} tanketokens)…"
+                            ),
+                            _ => format!(
+                                "Tänker igenom struktur och detaljer ({thinking_tokens} tanketokens)…"
+                            ),
                         };
                         on_progress(SummarizeProgressPayload {
                             phase: "thinking".to_string(),
@@ -1443,15 +1992,15 @@ impl SummarizerEngine {
                             thinking_tokens,
                             generated_tokens: 0,
                             tokens_per_sec: tps,
-                            chunk_current: chunk_info.map(|x| x.0),
-                            chunk_total: chunk_info.map(|x| x.1),
+                            chunk_current: chunk_pair.map(|x| x.0),
+                            chunk_total: chunk_pair.map(|x| x.1),
                         });
                     }
                 }
             } else if Some(next_token) != channel_end_tok {
                 answer_tokens.push(next_token);
 
-                if answer_tokens.len() >= MAX_ANSWER_TOKENS {
+                if answer_tokens.len() >= max_answer_tokens {
                     break;
                 }
 
@@ -1470,13 +2019,33 @@ impl SummarizerEngine {
                         tokens_per_sec: tps,
                     });
 
-                    let lbl = if let Some((c, tot)) = chunk_info {
-                        format!("Sammanfattar del {c} av {tot}…")
-                    } else {
-                        "Skriver mötesanteckning…".to_string()
+                    let (phase_str, lbl) = match step_label {
+                        StepLabel::EvidenceExtract { idx, total } => (
+                            "extracting_evidence",
+                            format!("Steg 1/2: Extraherar bevispaket {idx} av {total} till lokal disk…"),
+                        ),
+                        StepLabel::ThematicMatrix => (
+                            "thematic_coding",
+                            "Steg 2/3: Bygger gemensam temamatris över mötets avsnitt…".to_string(),
+                        ),
+                        StepLabel::SynthesisSection { idx, total, title } => (
+                            "generating",
+                            format!("Steg 3/3: Skriver sektion {idx}/{total} ({title})…"),
+                        ),
+                        StepLabel::DecisionsAppendix => (
+                            "generating",
+                            "Sammanställer avslutande beslut och åtgärder…".to_string(),
+                        ),
+                        StepLabel::CleanupChunk { idx, total } => (
+                            "generating",
+                            format!("Korrekturläser del {idx} av {total}…"),
+                        ),
+                        StepLabel::SingleDocument => {
+                            ("generating", "Skriver mötesdokument…".to_string())
+                        }
                     };
                     on_progress(SummarizeProgressPayload {
-                        phase: "generating".to_string(),
+                        phase: phase_str.to_string(),
                         label: lbl,
                         prefill_percent: 100,
                         kv_reused_tokens: keep_len,
@@ -1484,8 +2053,8 @@ impl SummarizerEngine {
                         thinking_tokens,
                         generated_tokens: answer_tokens.len(),
                         tokens_per_sec: tps,
-                        chunk_current: chunk_info.map(|x| x.0),
-                        chunk_total: chunk_info.map(|x| x.1),
+                        chunk_current: chunk_pair.map(|x| x.0),
+                        chunk_total: chunk_pair.map(|x| x.1),
                     });
                 }
             }
@@ -1524,6 +2093,27 @@ impl SummarizerEngine {
             thinking_tokens,
             tokens_per_sec: tps,
         })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum StepLabel<'a> {
+    SingleDocument,
+    EvidenceExtract { idx: usize, total: usize },
+    ThematicMatrix,
+    SynthesisSection { idx: usize, total: usize, title: &'a str },
+    DecisionsAppendix,
+    CleanupChunk { idx: usize, total: usize },
+}
+
+impl StepLabel<'_> {
+    fn chunk_pair(&self) -> Option<(usize, usize)> {
+        match *self {
+            StepLabel::EvidenceExtract { idx, total }
+            | StepLabel::SynthesisSection { idx, total, .. }
+            | StepLabel::CleanupChunk { idx, total } => Some((idx, total)),
+            _ => None,
+        }
     }
 }
 
@@ -1601,6 +2191,7 @@ mod tests {
             agenda: None,
             creative: false,
             thorough: false,
+            deep_evidence: None,
             model_id: Some("e2b".to_string()),
             sampling: None,
         }
@@ -1679,10 +2270,10 @@ mod tests {
     }
 
     #[test]
-    fn splits_long_text_cleanly_at_sentence_boundaries() {
-        let sentence = "Detta är en mening om projektets tidsplan och leveranser. ";
+    fn splits_long_text_cleanly_at_turn_and_sentence_boundaries() {
+        let sentence = "Anna: Detta är ett talarinlägg om projektets tidsplan och leveranser.\n";
         let long_text = sentence.repeat(80);
-        let chunks = split_into_chunks(&long_text, 300, 3.5, 30);
+        let chunks = crate::evidence::split_transcript_on_turns(&long_text, 300, 3.5, 30);
         assert!(chunks.len() >= 4);
         assert!(chunks[0].ends_with('.'));
     }
@@ -1741,6 +2332,7 @@ Erik Sjöberg: Absolut, jag lägger in det i sprint 14 och återkopplar på fred
         let res1 = eng
             .run_summarize(
                 &req1,
+                None,
                 &cancel,
                 |prog| {
                     if prog.phase == "prefill" {
@@ -1778,6 +2370,7 @@ Erik Sjöberg: Absolut, jag lägger in det i sprint 14 och återkopplar på fred
         let res2 = eng
             .run_summarize(
                 &req2,
+                None,
                 &cancel,
                 |prog| {
                     if prog.phase == "prefill" {
@@ -1801,5 +2394,103 @@ Erik Sjöberg: Absolut, jag lägger in det i sprint 14 och återkopplar på fred
             "Förväntade återanvändning av >7000 tokens trots ändrat kreativt läge + sammanhang, fick {}",
             res2.kv_reused_tokens
         );
+    }
+
+    #[test]
+    #[ignore]
+    fn real_disk_evidence_pipeline_smoke_test() {
+        let e2b_path = std::path::PathBuf::from(
+            "/Users/patriksvensk/Library/Application Support/com.loki.app/models/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
+        );
+        let e4b_path = std::path::PathBuf::from(
+            "/Users/patriksvensk/Library/Application Support/com.loki.app/models/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
+        );
+        let (spec, p) = if e2b_path.exists() {
+            (&MODEL_E2B, e2b_path)
+        } else {
+            (&MODEL_E4B, e4b_path)
+        };
+        assert!(p.exists(), "GGUF saknas på {}", p.display());
+
+        let mut eng = SummarizerEngine::load(spec, &p).expect("load Gemma 4");
+        let tmp_cache = std::env::temp_dir().join("loki_smoke_evidence_disk");
+        crate::evidence::cleanup_all_evidence_cache(&tmp_cache);
+
+        let part_a = "\
+Anna Lindqvist: Välkomna till projektmötet om e-tjänsteplattformen. Första punkten är logglagring och informationssäkerhet.\n\
+Maria Holm: Juristen och CISO har slagit fast att personuppgifter i felsökningsloggar måste gallras automatiskt efter 90 dagar.\n\
+Johan Berg (Kundtjänst): Jag måste invända här! Rensar vi efter 90 dagar står kundtjänst helt utan spårbarhet när kvartalsfakturorna överklagas efter tre månader.\n\
+Anna Lindqvist: Vi noterar Johans invändning som en risk att bevaka, men vi beslutar ändå att införa 90 dagars gallring senast 15 december, tillsammans med en anonymiserad fakturalogg.\n\
+Erik Sjöberg: Jag tar på mig att bygga gallringsjobbet och den anonymiserade fakturaloggen i sprint 14 till på fredag.\n\n";
+
+        let part_b = "\
+Anna Lindqvist: Nu går vi vidare till nästa fråga som är budget för licenser under Q1 och införande av kortkort — förlåt, SITHS-kort — för administratörerna.\n\
+Sara Ek: Kostnaden för SITHS-integrationen landar på 240 000 kronor. Henrik menade dock att vi borde avvakta till Q2 på grund av stram driftbudget.\n\
+Anna Lindqvist: Vi beslutar att godkänna de 240 000 kronorna ur reservpotten redan i Q1 eftersom säkerhetskravet inte kan vänta. Sara beställer certifikaten senast den 20 november.\n\n";
+
+        let mut multi_chunk_transcript = String::new();
+        while eng.count_tokens(&multi_chunk_transcript) < 5200 {
+            multi_chunk_transcript.push_str(part_a);
+            multi_chunk_transcript.push_str(part_b);
+        }
+
+        let mut req_deep = sample_req(
+            "thematic-workshop",
+            "Tematisk djupanalys",
+            "Skapa en tematisk djupanalys med teman, oenigheter/friktionspunkter, risker, citat samt beslut och åtgärder.",
+        );
+        req_deep.transcript = multi_chunk_transcript.clone();
+        req_deep.deep_evidence = Some(true);
+
+        let cancel = AtomicBool::new(false);
+        let res1 = eng
+            .run_summarize(
+                &req_deep,
+                Some(&tmp_cache),
+                &cancel,
+                |prog| {
+                    println!("[EVIDENCE-1] [{}] {}", prog.phase, prog.label);
+                },
+                |_c| {},
+            )
+            .expect("evidence run 1");
+
+        println!(
+            "[EVIDENCE-1] KLAR på {} ms (strategi={}):\n---\n{}\n---",
+            res1.duration_ms, res1.strategy, res1.markdown
+        );
+        assert_eq!(res1.strategy, "evidence");
+        assert!(res1.markdown.contains("90") || res1.markdown.contains("240"));
+
+        // Kör nu direkt ett mallbyte till Beslutslogg -> ska återanvända 100 % av bevispaketen från disk på 0 ms i Pass 1!
+        let mut req_decisions = sample_req(
+            "decision-log",
+            "Beslutslogg",
+            "Lista alla beslut som fattas i kronologisk ordning med motivering.",
+        );
+        req_decisions.transcript = multi_chunk_transcript;
+        req_decisions.deep_evidence = Some(true);
+
+        let t_switch = Instant::now();
+        let res2 = eng
+            .run_summarize(
+                &req_decisions,
+                Some(&tmp_cache),
+                &cancel,
+                |prog| {
+                    println!("[EVIDENCE-2-DISK-HIT] [{}] {}", prog.phase, prog.label);
+                },
+                |_c| {},
+            )
+            .expect("evidence run 2 from disk cache");
+        let switch_ms = t_switch.elapsed().as_millis();
+        println!(
+            "[EVIDENCE-2-DISK-HIT] Mallbyte från sparade bevispaket klart på {} ms (kv_reused={}):\n---\n{}\n---",
+            switch_ms, res2.kv_reused_tokens, res2.markdown
+        );
+        assert!(res2.kv_reused_tokens >= 3400, "Förväntade träff i disk-cachen!");
+        assert!(!res2.markdown.trim().is_empty());
+
+        crate::evidence::cleanup_all_evidence_cache(&tmp_cache);
     }
 }

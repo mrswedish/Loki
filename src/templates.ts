@@ -129,6 +129,31 @@ export const BUILTIN_TEMPLATES: SummaryTemplate[] = [
       'inte framgår. Om inga beslut fattas, skriv "Inga beslut fattades."',
   },
   {
+    id: "thematic-workshop",
+    label: "Tematisk djupanalys",
+    description: "Teman, oenigheter, risker & citat (workshops/långa möten)",
+    iconName: "layers",
+    builtin: true,
+    sampling: STRICT_SAMPLING,
+    systemPrompt:
+      `${COMMON_PREAMBLE}\n\n` +
+      "Skapa en fördjupad tematisk analys av samtalet eller workshopen. Till skillnad från en " +
+      "vanlig sammanfattning får du INTE släta över meningskiljaktigheter eller minoritetsåsikter.\n\n" +
+      "STRUKTUR (utelämna en avslutande rubrik om underlag saknas helt):\n" +
+      "## Övergripande bild\n" +
+      "Tre till fem meningar om samtalets kärnfrågor, stämning och viktigaste vägval.\n\n" +
+      "## Tematisk genomgång\n" +
+      "Skapa en underrubrik `### [Tema]` för varje huvudtema (samla allt som rörde samma sakfråga " +
+      "även om deltagarna återkom till den senare i mötet). Under varje tema, redovisa:\n" +
+      "- **Kärnresonemang & samstämmighet:** vad som lyftes, konkreta siffror/förslag och vad man var enig om.\n" +
+      "- **Friktionspunkter & avvikande perspektiv:** tillfällen där deltagare sa emot varandra, lyfte invändningar eller såg olika på frågan.\n" +
+      "- **Nyckelcitat:** 1–2 korta, belysande citat med talare när formuleringen fångar en viktig nyans eller vändpunkt (utelämna om citat saknas för temat).\n\n" +
+      "## Outtalade antaganden & olösta risker\n" +
+      "Punktlista med problem, beroenden eller farhågor som nämndes i förbifarten utan att lösas.\n\n" +
+      "## Beslut & nästa steg\n" +
+      "Fattade beslut samt konkreta åtgärder med ansvarig person när det framgår.",
+  },
+  {
     id: "transcription-cleanup",
     label: "Rätta transkriberingen",
     description: "Korrigera hörselfel utan att sammanfatta",

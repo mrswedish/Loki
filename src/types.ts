@@ -18,6 +18,7 @@ export interface SummaryTemplate {
     | "list-checks"
     | "clipboard-list"
     | "gavel"
+    | "layers"
     | "eraser"
     | "sparkles";
   sampling?: TemplateSampling;
@@ -89,6 +90,7 @@ export interface SummarizeRequest {
   agenda?: string;
   creative: boolean;
   thorough: boolean;
+  deepEvidence?: boolean;
   modelId?: string;
   sampling?: TemplateSampling;
 }
@@ -97,6 +99,8 @@ export interface SummarizeProgressPayload {
   phase:
     | "loading_model"
     | "prefill"
+    | "extracting_evidence"
+    | "thematic_coding"
     | "thinking"
     | "generating"
     | "reducing";
@@ -127,7 +131,13 @@ export interface SummarizeResult {
   thinkingTokens: number;
   durationMs: number;
   tokensPerSec: number;
-  strategy: "single" | "chunked";
+  strategy:
+    | "single"
+    | "chunked"
+    | "evidence"
+    | "evidence-2pass"
+    | "cleanup-stream"
+    | string;
   usedTemperature: number;
 }
 

@@ -18,6 +18,7 @@ import {
   FolderOpen,
   Gavel,
   History,
+  Layers,
   ListChecks,
   Monitor,
   Moon,
@@ -95,6 +96,8 @@ function renderTemplateIcon(iconName?: SummaryTemplate["iconName"]) {
       return <ClipboardList size={15} aria-hidden="true" />;
     case "gavel":
       return <Gavel size={15} aria-hidden="true" />;
+    case "layers":
+      return <Layers size={15} aria-hidden="true" />;
     case "eraser":
       return <Eraser size={15} aria-hidden="true" />;
     default:
@@ -166,6 +169,7 @@ export default function App() {
   const [agendaFileName, setAgendaFileName] = useState<string | null>(null);
   const [creativeMode, setCreativeMode] = useState(false);
   const [thoroughMode, setThoroughMode] = useState(false);
+  const [deepEvidenceMode, setDeepEvidenceMode] = useState(false);
 
   // ── Körning, Streaming & Resultat ──
   const [isRunning, setIsRunning] = useState(false);
@@ -366,7 +370,12 @@ export default function App() {
   // Förvärm mötestexten tyst i GPU:ns KV-cache medan användaren väljer mall/rubrik/sammanhang
   useEffect(() => {
     const trimmed = transcript.trim();
-    if (isRunning || trimmed.length < 300 || !modelsOverview?.loadedModelId) {
+    if (
+      isRunning ||
+      deepEvidenceMode ||
+      trimmed.length < 300 ||
+      !modelsOverview?.loadedModelId
+    ) {
       return;
     }
     const timer = window.setTimeout(() => {
@@ -378,7 +387,13 @@ export default function App() {
       });
     }, 1100);
     return () => window.clearTimeout(timer);
-  }, [transcript, thoroughMode, isRunning, modelsOverview?.loadedModelId]);
+  }, [
+    transcript,
+    thoroughMode,
+    deepEvidenceMode,
+    isRunning,
+    modelsOverview?.loadedModelId,
+  ]);
 
   // Synka redigering i resultatdokumentet till aktuell historikpost
   async function persistHistoryMarkdownUpdate(updatedMd: string) {
@@ -632,6 +647,7 @@ export default function App() {
           agenda: agendaText.trim() || undefined,
           creative: creativeMode,
           thorough: thoroughMode,
+          deepEvidence: deepEvidenceMode,
           modelId: modelsOverview.activeModelId,
           sampling: template.sampling,
         },
@@ -1594,6 +1610,33 @@ export default function App() {
                 <Brain size={14} aria-hidden="true" />
                 <span>Noggrannare</span>
               </button>
+
+              {selectedTemplate.id !== "transcription-cleanup" && (
+                <button
+                  type="button"
+                  className="toggle-chip-btn"
+                  aria-pressed={
+                    deepEvidenceMode ||
+                    ((transcriptStats?.estimatedTokens ?? 0) + 4500 >
+                      (modelsOverview?.safeCtxTokens ?? 131072)) ||
+                    (selectedTemplate.id === "thematic-workshop" &&
+                      (transcriptStats?.estimatedTokens ?? 0) >= 5500)
+                  }
+                  onClick={() => setDeepEvidenceMode((v) => !v)}
+                  title="Extraherar först strukturerade bevispaket (fakta, beslut, oenigheter & citat) till lokal disk med låg RAM-användning och syntetiserar därefter dokumentet. Aktiveras även automatiskt på mycket långa möten."
+                >
+                  <Layers size={14} aria-hidden="true" />
+                  <span>
+                    {!deepEvidenceMode &&
+                    (((transcriptStats?.estimatedTokens ?? 0) + 4500 >
+                      (modelsOverview?.safeCtxTokens ?? 131072)) ||
+                      (selectedTemplate.id === "thematic-workshop" &&
+                        (transcriptStats?.estimatedTokens ?? 0) >= 5500))
+                      ? "Djupanalys (auto)"
+                      : "Djupanalys"}
+                  </span>
+                </button>
+              )}
             </div>
 
             {agendaOpen && (
@@ -1788,12 +1831,16 @@ export default function App() {
               <div className="progress-card-row">
                 <span id="summarize-progress-label">{runProgress.label}</span>
                 <span className="progress-meta">
-                  {runProgress.phase === "generating" ||
-                  runProgress.phase === "thinking"
-                    ? `${runProgress.generatedTokens || runProgress.thinkingTokens} tokens · ${runProgress.tokensPerSec.toFixed(1)} tok/s`
-                    : runProgress.phase === "prefill"
-                      ? `${runProgress.prefillPercent} %`
-                      : ""}
+                  {runProgress.phase === "extracting_evidence"
+                    ? `${runProgress.chunkCurrent ?? 1}/${runProgress.chunkTotal ?? 1} avsnitt · ${runProgress.tokensPerSec > 0 ? `${runProgress.tokensPerSec.toFixed(1)} tok/s` : "diskcache"}`
+                    : runProgress.phase === "thematic_coding"
+                      ? "Temakodning…"
+                      : runProgress.phase === "generating" ||
+                          runProgress.phase === "thinking"
+                        ? `${runProgress.generatedTokens || runProgress.thinkingTokens} tokens · ${runProgress.tokensPerSec.toFixed(1)} tok/s`
+                        : runProgress.phase === "prefill"
+                          ? `${runProgress.prefillPercent} %`
+                          : ""}
                 </span>
               </div>
               <progress
@@ -1802,7 +1849,14 @@ export default function App() {
                 value={
                   runProgress.phase === "prefill"
                     ? runProgress.prefillPercent
-                    : undefined
+                    : runProgress.phase === "extracting_evidence" &&
+                        runProgress.chunkCurrent &&
+                        runProgress.chunkTotal
+                      ? Math.round(
+                          (runProgress.chunkCurrent / runProgress.chunkTotal) *
+                            100
+                        )
+                      : undefined
                 }
                 max={100}
               />
@@ -1847,13 +1901,19 @@ export default function App() {
                             </span>
                           </>
                         )}
+                        {(lastResultMeta.strategy === "evidence" ||
+                          lastResultMeta.strategy === "evidence-2pass") && (
+                          <span className="kv-fast-badge">
+                            {lastResultMeta.strategy === "evidence-2pass"
+                              ? "Tvåstegs djupanalys (disk)"
+                              : "Djupanalys (bevispaket)"}
+                          </span>
+                        )}
                         {lastResultMeta.kvReusedTokens > 500 && (
                           <span className="kv-fast-badge">
-                            Varm cache:{" "}
-                            {lastResultMeta.kvReusedTokens.toLocaleString(
-                              "sv-SE"
-                            )}{" "}
-                            tokens återanvända
+                            {lastResultMeta.strategy.startsWith("evidence")
+                              ? "Återanvänd beviscache från disk"
+                              : `Varm cache: ${lastResultMeta.kvReusedTokens.toLocaleString("sv-SE")} tokens återanvända`}
                           </span>
                         )}
                       </div>
